@@ -17,7 +17,7 @@ jobs:
           -framework Security \
           -x c fishhook.c \
           -x objective-c++ AmarShield_AtoZ_Final.mm \
-          -o AmarShield.dylib
+          -o fullShield.dylib
           
       - uses: actions/upload-artifact@v4
         with:
