@@ -2,9 +2,12 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h> 
 #include <mach-o/dyld.h>
-#include <netdb.h>
-#include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <errno.h>
+#include <stdarg.h>
 
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
@@ -15,76 +18,119 @@ static UIButton *shieldBtn;
 static UIButton *cleanBtn;
 
 // =================================================================
-// ===============  الهوكات الآمنة (AMFI Safe Hooks) ===============
+// ===============  1. حماية بصمة التوقيع والغيابي (Integrity) =====
 // =================================================================
 
-// 1. هوك التخفي الفائق (بدون إرهاق المعالج)
-static int (*orig_strcmp)(const char *s1, const char *s2);
-int my_strcmp(const char *s1, const char *s2) {
-    if (isShieldActive && s1 && s2 && s1[0] != '\0' && s2[0] != '\0') {
-        // فحص سريع ومحدود جداً لمنع أي كراش في المعالج
-        char c = s1[0];
-        if (c == 'a' || c == 'S' || c == 'C') { 
-            if (strstr(s1, "anogs") || strstr(s2, "anogs") || 
-                strstr(s1, "Shadow") || strstr(s2, "Shadow") ||
-                strstr(s1, "Cydia") || strstr(s2, "Cydia")) {
-                return 1; // إخفاء المكتبة بصمت
-            }
-        }
+// فلتر فائق السرعة لمنع اختناق المعالج (O(1) Check)
+inline bool isDangerousPath(const char *path) {
+    if (!path) return false;
+    // نبحث فقط عن الملفات التي تفضح التعديل أو تخزن الباند الغيابي
+    if (strstr(path, "embedded.mobileprovision") || // فحص التوقيع الخارجي
+        strstr(path, "ShadowTrackerExtra/Saved/Logs") || // سجلات الغيابي
+        strstr(path, "anogs") || 
+        strstr(path, "Cydia") || 
+        strstr(path, "TrollStore")) {
+        return true;
     }
-    return orig_strcmp(s1, s2);
+    return false;
 }
 
-// 2. هوك حماية الشهادات (Anti-Revoke)
+// هوك stat: اللعبة تسأل "هل الملف موجود ومقاسه سليم؟"
+static int (*orig_stat)(const char *path, struct stat *buf);
+int my_stat(const char *path, struct stat *buf) {
+    if (isShieldActive && isDangerousPath(path)) {
+        errno = ENOENT; // تزييف: الملف غير موجود!
+        return -1;
+    }
+    return orig_stat(path, buf);
+}
+
+// هوك lstat: نفس stat لكن للروابط الرمزية (Symlinks)
+static int (*orig_lstat)(const char *path, struct stat *buf);
+int my_lstat(const char *path, struct stat *buf) {
+    if (isShieldActive && isDangerousPath(path)) {
+        errno = ENOENT;
+        return -1;
+    }
+    return orig_lstat(path, buf);
+}
+
+// هوك open: اللعبة تحاول فتح الملف لقراءته
+static int (*orig_open)(const char *path, int oflag, ...);
+int my_open(const char *path, int oflag, ...) {
+    mode_t mode = 0;
+    if (oflag & O_CREAT) {
+        va_list args;
+        va_start(args, oflag);
+        mode = va_arg(args, int);
+        va_end(args);
+    }
+    
+    if (isShieldActive && isDangerousPath(path)) {
+        errno = ENOENT; // منع فتح ملفات البصمة وسجلات الغيابي
+        return -1;
+    }
+    
+    if (oflag & O_CREAT) return orig_open(path, oflag, mode);
+    return orig_open(path, oflag);
+}
+
+// =================================================================
+// ===============  2. حماية الشهادة وحظر التجسس (Anti-Revoke) =====
+// =================================================================
+
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
     if (isShieldActive && node) {
-        const char* blocks[] = {"apple.com", "google-analytics.com", "world-gen.g.aaplimg.com", "ppq.apple.com", "app-measurement.com"};
-        for (int i = 0; i < 5; i++) { 
-            if (strstr(node, blocks[i])) return EAI_NONAME; 
+        // سيرفرات أبل (للشهادة) وسيرفرات تنسنت (للغيابي)
+        const char* blockedDomains[] = {
+            "ocsp.apple.com", "ppq.apple.com", "world-gen.g.aaplimg.com", // حماية الشهادة
+            "app-measurement.com", "google-analytics.com", "crashsight"   // حماية الغيابي والإبلاغ
+        };
+        for (int i = 0; i < 6; i++) { 
+            if (strstr(node, blockedDomains[i])) return EAI_NONAME; // تزييف: السيرفر لا يوجد!
         }
     }
     return orig_getaddrinfo(node, service, hints, res);
 }
 
 // =================================================================
-// ===============  نظام التنظيف العميق (Anti-Ban) =================
+// ===============  3. التنظيف اليدوي الاحتياطي (Deep Clean) =======
 // =================================================================
 
-void ExecuteDeepCleanSafe() {
+void ExecuteDeepCleanBackup() {
     NSArray *paths = @[
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Logs", NSHomeDirectory()],
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()],
-        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Config", NSHomeDirectory()],
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Pandora", NSHomeDirectory()],
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/RoleInfo.ini", NSHomeDirectory()]
     ];
     NSFileManager *fm = [NSFileManager defaultManager];
     for (NSString *p in paths) { 
-        if ([fm fileExistsAtPath:p]) {
-            [fm removeItemAtPath:p error:nil]; 
-        }
+        if ([fm fileExistsAtPath:p]) [fm removeItemAtPath:p error:nil]; 
     }
 }
 
 // =================================================================
-// ===============  أحداث واجهة المستخدم (Thread Safe) =============
+// ===============  أحداث الواجهة (Thread Safe Implementation) =====
 // =================================================================
 
-void ActionTapShieldSafe() {
+void ActionActivateIllusion() {
     if (isShieldActive) return;
     
-    // تفعيل الهوكات الآمنة فقط (لا نلمس access ولا stat ولا الذاكرة المباشرة)
+    // زرع هوكات التخفي والبصمة فقط (بدون باتشات ذاكرة مدمرة)
     struct rebinding r[] = { 
-        {"strcmp", (void*)my_strcmp, (void**)&orig_strcmp},
+        {"stat", (void*)my_stat, (void**)&orig_stat},
+        {"lstat", (void*)my_lstat, (void**)&orig_lstat},
+        {"open", (void*)my_open, (void**)&orig_open},
         {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo}
     };
-    rebind_symbols(r, 2);
+    rebind_symbols(r, 4);
     
     isShieldActive = true;
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        [shieldBtn setTitle:@"🛡️ ON" forState:UIControlStateNormal];
+        [shieldBtn setTitle:@"🛡️ SAFE" forState:UIControlStateNormal];
         shieldBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.8 blue:0.2 alpha:0.9]; 
         
         CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
@@ -94,9 +140,9 @@ void ActionTapShieldSafe() {
     });
 }
 
-void ActionTapCleanSafe() {
+void ActionCleanIllusion() {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        ExecuteDeepCleanSafe(); 
+        ExecuteDeepCleanBackup(); 
         dispatch_async(dispatch_get_main_queue(), ^{
             [cleanBtn setTitle:@"✨ DONE" forState:UIControlStateNormal];
             cleanBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.8 blue:0.2 alpha:0.9];
@@ -109,16 +155,16 @@ void ActionTapCleanSafe() {
 }
 
 // =================================================================
-// ===============  تصميم اللوحة القابلة للسحب =====================
+// ===============  واجهة المستخدم المزدوجة ========================
 // =================================================================
 
-@interface AmarSurvivalUI : NSObject
+@interface AmarIllusionUI : NSObject
 + (void)initializeUI;
 @end
 
-@implementation AmarSurvivalUI
+@implementation AmarIllusionUI
 + (void)initializeUI {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
         for (UIWindowScene* s in [UIApplication sharedApplication].connectedScenes) {
             if (s.activationState == UISceneActivationStateForegroundActive) { win = s.windows.firstObject; break; }
@@ -129,7 +175,7 @@ void ActionTapCleanSafe() {
         floatingContainer.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.85];
         floatingContainer.layer.cornerRadius = 37.5;
         floatingContainer.layer.borderWidth = 1.5;
-        floatingContainer.layer.borderColor = [UIColor greenColor].CGColor; // لون النجاة
+        floatingContainer.layer.borderColor = [UIColor cyanColor].CGColor; 
         floatingContainer.clipsToBounds = YES;
         
         shieldBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -163,10 +209,10 @@ void ActionTapCleanSafe() {
     [p setTranslation:CGPointZero inView:p.view.superview];
 }
 
-+ (void)tapShield { ActionTapShieldSafe(); }
-+ (void)tapClean { ActionTapCleanSafe(); }
++ (void)tapShield { ActionActivateIllusion(); }
++ (void)tapClean { ActionCleanIllusion(); }
 @end
 
-__attribute__((constructor)) static void inject_survival() { 
-    [AmarSurvivalUI initializeUI]; 
+__attribute__((constructor)) static void inject_illusion() { 
+    [AmarIllusionUI initializeUI]; 
 }
