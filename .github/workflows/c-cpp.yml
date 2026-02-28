@@ -1,25 +1,33 @@
-name: "Amar Shield Final Build"
-on: [push, workflow_dispatch]
+name: "Amar Zeus Theos Build"
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: "Compile Pro Max Dylib"
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      - name: "Setup Theos Environment"
         run: |
-          xcrun -sdk iphoneos clang++ -dynamiclib -arch arm64 \
-          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-          -fobjc-arc \
-          -framework Foundation \
-          -framework UIKit \
-          -framework CoreGraphics \
-          -framework QuartzCore \
-          -framework Security \
-          -x c fishhook.c \
-          -x objective-c++ AmarShield_AtoZ_Final.mm \
-          -o fullShield.dylib
-          
-      - uses: actions/upload-artifact@v4
+          # تحميل وتثبيت Theos الرسمية على خادم البناء
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          echo "THEOS=~/theos" >> $GITHUB_ENV
+
+      - name: "Build Tweak with Theos"
+        run: |
+          # أمر البناء البسيط بفضل الـ Makefile
+          make package FINALPACKAGE=1
+        env:
+          THEOS: ~/theos
+
+      - name: "Upload Dylib"
+        uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-Ultimate-IPA
-          path: fullShield.dylib
+          name: AmarShield-Theos-Dylib
+          # Theos يضع الـ dylib الجاهز في هذا المسار المخفي
+          path: .theos/obj/**/*.dylib
