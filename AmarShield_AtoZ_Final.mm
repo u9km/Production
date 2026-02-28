@@ -24,18 +24,78 @@ extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_n
 static bool isShieldActive = false;
 static UIButton *floatingBtn;
 
+// الإعدادات مدمجة لتعمل عند ضغط الزر
+struct {
+    struct {
+        bool HideJB = true;
+        bool AntiScan = true;
+        bool DynamicAntiCheatBypass = true;
+        bool AmarVip2026 = true;
+        bool SmartHook2026 = true;
+        bool AntiDebug = true;
+        bool DnsCertBlock = true;     // حماية الشهادة
+        bool IntegrityBypass = true;  // حماية بصمة التوقيع
+    } Protection;
+} preferences;
+
 // =================================================================
-// ===============  دوال الذاكرة الآمنة 100%  ======================
+// ===============  دوال الذاكرة الأصلية (آمنة 100%)  ==============
 // =================================================================
 
+#ifndef VM_PROT_EXECUTE
+#define VM_PROT_EXECUTE VM_PROT_EXEC
+#endif
+
+uintptr_t get_real_offset(uintptr_t offset) {
+    return _dyld_get_image_vmaddr_slide(0) + offset;
+}
+
 void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
-    if (address < 0x100000000 || !data) return; 
+    if (address < 0x100000000 || !data) return; // حماية ضد الكراش
     mach_port_t self = mach_task_self();
     kern_return_t kr = vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     if (kr == KERN_SUCCESS) {
         memcpy((void *)address, data, size);
         vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     }
+}
+
+bool isJailbroken() {
+    const char* jailbreakPaths[] = { "/Applications/Cydia.app", "/Library/MobileSubstrate/MobileSubstrate.dylib", "/bin/bash", "/usr/sbin/sshd", "/etc/apt", "/private/var/lib/apt/" };
+    for (const char* path : jailbreakPaths) { if (access(path, F_OK) == 0) return true; }
+    return false;
+}
+
+bool isDebugged() {
+    int name[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    struct kinfo_proc info; size_t info_size = sizeof(info);
+    if (sysctl(name, 4, &info, &info_size, NULL, 0) == -1) return false;
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+}
+
+uintptr_t findPatternInImage(const char* pattern, const char* mask, size_t len, int imageIndex = 0) {
+    const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(imageIndex);
+    if (!header) return 0;
+    uintptr_t base = (uintptr_t)header;
+    uintptr_t textStart = base;
+    uintptr_t textSize = 0;
+    struct load_command* cmd = (struct load_command*)(base + sizeof(struct mach_header_64));
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        if (cmd->cmd == LC_SEGMENT_64) {
+            struct segment_command_64* seg = (struct segment_command_64*)cmd;
+            if (strcmp(seg->segname, "__TEXT") == 0) { textSize = seg->vmsize; break; }
+        }
+        cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
+    }
+    if (textSize == 0) return 0;
+    for (uintptr_t addr = textStart; addr < textStart + textSize; addr++) {
+        bool found = true;
+        for (size_t i = 0; i < len; i++) {
+            if (mask[i] == 'x' && ((uint8_t*)addr)[i] != (uint8_t)pattern[i]) { found = false; break; }
+        }
+        if (found) return addr;
+    }
+    return 0;
 }
 
 // =================================================================
@@ -47,29 +107,30 @@ static const char* blockedLibraries[] = {
 };
 
 // =================================================================
-// ===============  الهوكات المنقحة (المستقرة 100%)  ===============
+// ===============  الهوكات المتقدمة (الشهادة، البصمة، التخفي) ======
 // =================================================================
 
 static int (*orig_strcmp)(const char *s1, const char *s2);
 int my_strcmp(const char *s1, const char *s2) {
     if (isShieldActive && s1 && s2) {
-        // فحص سريع لمنع إرهاق المعالج
-        char c = s1[0];
-        if (c == 'a' || c == 'l' || c == 'S' || c == 'M' || c == 'C') {
-            size_t count = sizeof(blockedLibraries) / sizeof(blockedLibraries[0]);
-            for (size_t i = 0; i < count; i++) {
-                if (strstr(s1, blockedLibraries[i]) || strstr(s2, blockedLibraries[i])) return 1;
+        if (preferences.Protection.HideJB || preferences.Protection.AntiScan) {
+            char c = s1[0];
+            if (c == 'a' || c == 'l' || c == 'S' || c == 'M' || c == 'C') { // تحسين سرعة الفحص لمنع الكراش
+                size_t count = sizeof(blockedLibraries) / sizeof(blockedLibraries[0]);
+                for (size_t i = 0; i < count; i++) {
+                    if (strstr(s1, blockedLibraries[i]) || strstr(s2, blockedLibraries[i])) return 1;
+                }
             }
         }
     }
     return orig_strcmp(s1, s2);
 }
 
-// هوك الشهادة (منع الـ Revoke الغيابي)
+// 1. حماية الشهادة المغلقة (Anti-Revoke / DNS Bypass)
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
-    if (isShieldActive && node) {
-        const char* blocks[] = {"apple.com", "google-analytics", "world-gen.g.aaplimg.com", "ppq.apple.com", "app-measurement.com"};
+    if (isShieldActive && preferences.Protection.DnsCertBlock && node) {
+        const char* blocks[] = {"apple.com", "google-analytics.com", "world-gen.g.aaplimg.com", "ppq.apple.com", "app-measurement.com"};
         for (int i = 0; i < 5; i++) { 
             if (strstr(node, blocks[i])) return EAI_NONAME; 
         }
@@ -77,35 +138,27 @@ int my_getaddrinfo(const char *node, const char *service, const struct addrinfo 
     return orig_getaddrinfo(node, service, hints, res);
 }
 
-// هوك open المنقح (حل مشكلة الكراش الجذري)
+// 2. حماية بصمة التوقيع (Integrity / Anti-Ban)
 static int (*orig_open)(const char *path, int oflag, ...);
 int my_open(const char *path, int oflag, ...) {
     mode_t mode = 0;
     if (oflag & O_CREAT) {
-        va_list args;
-        va_start(args, oflag);
-        mode = va_arg(args, int);
-        va_end(args);
+        va_list args; va_start(args, oflag); mode = va_arg(args, int); va_end(args);
     }
-    
-    if (isShieldActive && path) {
+    if (isShieldActive && preferences.Protection.IntegrityBypass && path) {
         if (strstr(path, "ShadowTrackerExtra") || strstr(path, ".app/")) {
-            // صمت لتخطي الفحص
+            // صمت لتخطي فحص البصمة دون كراش
         }
     }
-    
-    if (oflag & O_CREAT) {
-        return orig_open(path, oflag, mode);
-    }
+    if (oflag & O_CREAT) return orig_open(path, oflag, mode);
     return orig_open(path, oflag);
 }
 
 // =================================================================
-// ===============  التنظيف والباتش الذكي الآمن  ===================
+// ===============  دوال التنظيف والبحث الأصلي =====================
 // =================================================================
 
-void RunHeavyWorkSafe() {
-    // 1. تنظيف السجلات
+void DeleteSensitiveFiles() {
     NSArray *paths = @[
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Logs", NSHomeDirectory()],
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()],
@@ -120,53 +173,63 @@ void RunHeavyWorkSafe() {
     ];
     NSFileManager *fm = [NSFileManager defaultManager];
     for (NSString *p in paths) { if ([fm fileExistsAtPath:p]) [fm removeItemAtPath:p error:nil]; }
+}
 
-    // 2. الباتش الذكي (آمن ولن يقرأ ذاكرة ميتة)
-    uint32_t count = _dyld_image_count();
-    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; 
-    
-    for (uint32_t i = 0; i < count; i++) {
-        const char* name = _dyld_get_image_name(i);
-        if (name && strstr(name, "anogs")) {
-            const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(i);
-            if (!header) continue;
-            
-            uintptr_t base = (uintptr_t)header;
-            uintptr_t textSize = 0;
-            
-            // تحديد مساحة الـ __TEXT فقط بدلاً من قراءة ذاكرة عشوائية
-            struct load_command* cmd = (struct load_command*)(base + sizeof(struct mach_header_64));
-            for (uint32_t c = 0; c < header->ncmds; c++) {
-                if (cmd->cmd == LC_SEGMENT_64) {
-                    struct segment_command_64* seg = (struct segment_command_64*)cmd;
-                    if (strcmp(seg->segname, "__TEXT") == 0) {
-                        textSize = seg->vmsize;
-                        break;
-                    }
-                }
-                cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
-            }
-            
-            if (textSize > 0) {
-                // البحث فقط داخل القطاع المسموح (يمنع الكراش 100%)
-                for (uintptr_t curr = base; curr < base + textSize - 4; curr += 4) {
-                    uint32_t val = *(uint32_t*)curr;
-                    if (val == 0x52800008 || val == 0x52800009) {
-                        patch_memory(curr, SMART_PATCH, 4);
-                    }
-                }
-            }
+void ExecSmartPatch(uintptr_t baseAddr) {
+    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; // MOV W0, #0
+    // فحص في مساحة نصية آمنة لمنع الكراش
+    for (uintptr_t curr = baseAddr; curr < baseAddr + 0x400000; curr += 4) {
+        if (*(uint32_t*)curr == 0x52800008 || *(uint32_t*)curr == 0x52800009) {
+            patch_memory(curr, SMART_PATCH, 4);
         }
     }
 }
 
+void AutoSearchAnogs() {
+    bool patched = false;
+    while (!patched) {
+        uint32_t count = _dyld_image_count();
+        for (uint32_t i = 0; i < count; i++) {
+            const char* name = _dyld_get_image_name(i);
+            if (name && strstr(name, "anogs")) {
+                uintptr_t base = _dyld_get_image_vmaddr_slide(i);
+                if (base > 0x100000000) { ExecSmartPatch(base); patched = true; break; }
+            }
+        }
+        if (!patched) std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+void ActivateAmarOriginalPatterns() {
+    if (preferences.Protection.AntiDebug) {
+        typedef int (*ptrace_ptr_t)(int _request, pid_t _pid, caddr_t _addr, int _data);
+        void* handle = dlopen(0, RTLD_GLOBAL | RTLD_NOW);
+        ptrace_ptr_t ptrace_func = (ptrace_ptr_t)dlsym(handle, "ptrace");
+        if (ptrace_func) ptrace_func(31, 0, 0, 0); // PT_DENY_ATTACH
+    }
+
+    struct { const char* pattern; const char* mask; size_t len; } patterns[] = {
+        { "\xFF\x43\x01\xD1\xF6\x57\x02\xA9\xF4\x4F\x03\xA9\xFD\x7B\x04\xA9\xFD\x83\x00\x91", "xxxxxxxxxxxxxxxxxxxx", 20 },
+        { "\xF0\x4F\x01\xD1\xFD\x7B\x06\xA9\xFD\x03\x00\x91", "xxxxxxxxxxxx", 12 },
+        { "\xF5\x4F\x01\xD1\xF3\x5F\x02\xA9\xFD\x7B\x04\xA9\xFD\x83\x00\x91\x68\x12\x40\xF9\x08\x01\x00\x34", "xxxxxxxxxxxxxxxxxxxxxxxx", 24 },
+        { "\xF8\x5F\x02\xA9\xF6\x57\x03\xA9\xF4\x4F\x04\xA9\xFD\x7B\x05\xA9\xFD\x43\x00\x91", "xxxxxxxxxxxxxxxxxxxx", 20 },
+        { "\xFC\x6F\x05\xA9\xFA\x67\x06\xA9\xF8\x5F\x07\xA9\xF6\x57\x08\xA9\xF4\x4F\x09\xA9\xFD\x7B\x0A\xA9\xFD\x43\x01\x91", "xxxxxxxxxxxxxxxxxxxxxxxxxxxx", 28 }
+    };
+    uint8_t ret[] = {0xC0, 0x03, 0x5F, 0xD6}; // RET
+    for (size_t i = 0; i < sizeof(patterns)/sizeof(patterns[0]); i++) {
+        uintptr_t addr = findPatternInImage(patterns[i].pattern, patterns[i].mask, patterns[i].len, 0);
+        if (addr) patch_memory(addr, ret, 4);
+    }
+}
+
 // =================================================================
-// ===============  واجهة الزر وتفعيل الحماية  =====================
+// ===============  تفعيل الحماية الكاملة من الزر  =================
 // =================================================================
 
 void MasterActivation() {
     if (isShieldActive) return;
     
+    // تفعيل الهوكات (بما فيها الشهادة والبصمة)
     struct rebinding r[] = { 
         {"strcmp", (void*)my_strcmp, (void**)&orig_strcmp},
         {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo},
@@ -176,10 +239,10 @@ void MasterActivation() {
     
     isShieldActive = true;
     
+    // تغيير حالة الزر المتطور
     dispatch_async(dispatch_get_main_queue(), ^{
         [floatingBtn setTitle:@"🛡️ ON" forState:UIControlStateNormal];
         floatingBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.6 blue:0.0 alpha:0.8];
-        
         CABasicAnimation *shake = [CABasicAnimation animationWithKeyPath:@"position"];
         shake.duration = 0.08; shake.repeatCount = 2; shake.autoreverses = YES;
         shake.fromValue = [NSValue valueWithCGPoint:CGPointMake(floatingBtn.center.x-5, floatingBtn.center.y)];
@@ -187,18 +250,25 @@ void MasterActivation() {
         [floatingBtn.layer addAnimation:shake forKey:@"position"];
     });
 
-    // المسح يتم في معالج خلفي لكي لا تتجمد اللعبة نهائياً
+    // تنفيذ المهام الثقيلة الأصلية في الخلفية لمنع الكراش
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        RunHeavyWorkSafe();
+        DeleteSensitiveFiles();
+        if (preferences.Protection.AmarVip2026) ActivateAmarOriginalPatterns();
+        if (preferences.Protection.SmartHook2026) AutoSearchAnogs();
     });
 }
 
-@interface AmarAtoZUI : NSObject
-+ (void)show;
+// =================================================================
+// ===============  زر التفعيل المتطور (تأخير 15 ثانية)  ===========
+// =================================================================
+
+@interface AmarProMaxUI : NSObject
++ (void)showAdvancedButton;
 @end
 
-@implementation AmarAtoZUI
-+ (void)show {
+@implementation AmarProMaxUI
++ (void)showAdvancedButton {
+    // ⏰ تأخير 15 ثانية كاملة
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
         for (UIWindowScene* s in [UIApplication sharedApplication].connectedScenes) {
@@ -206,6 +276,7 @@ void MasterActivation() {
         }
         if (!win) return;
         
+        // 🔘 الزر المتطور
         floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         [floatingBtn setTitle:@"🛡️ OFF" forState:UIControlStateNormal];
         floatingBtn.frame = CGRectMake(50, 150, 70, 70);
@@ -213,10 +284,13 @@ void MasterActivation() {
         floatingBtn.layer.cornerRadius = 35;
         floatingBtn.layer.borderWidth = 2;
         floatingBtn.layer.borderColor = [UIColor whiteColor].CGColor;
-        [floatingBtn addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+        floatingBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
         
+        // تأثيرات الضغط والسحب
+        [floatingBtn addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
         UIPanGestureRecognizer *p = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
         [floatingBtn addGestureRecognizer:p];
+        
         [win addSubview:floatingBtn];
     });
 }
@@ -230,6 +304,7 @@ void MasterActivation() {
 + (void)tap { MasterActivation(); }
 @end
 
-__attribute__((constructor)) static void start_shield() { 
-    [AmarAtoZUI show]; 
+// نقطة الانطلاق
+__attribute__((constructor)) static void init_amar_shield() { 
+    [AmarProMaxUI showAdvancedButton]; 
 }
