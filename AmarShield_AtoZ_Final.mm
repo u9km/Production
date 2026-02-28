@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h> 
+#import <QuartzCore/QuartzCore.h> // <-- تم إضافة المكتبة هنا لحل الخطأ
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
@@ -27,7 +28,7 @@ static UIButton *floatingBtn;
 // =================================================================
 
 void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
-    if (address < 0x100000000) return; // حماية من الكراش (العناوين الصفرية)
+    if (address < 0x100000000) return; 
     mach_port_t self = mach_task_self();
     kern_return_t kr = vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     if (kr == KERN_SUCCESS) {
@@ -51,18 +52,16 @@ static const char* blockedLibraries[] = {
 static int (*orig_strcmp)(const char *s1, const char *s2);
 int my_strcmp(const char *s1, const char *s2) {
     if (isShieldActive && s1 != NULL && s2 != NULL) {
-        // فحص سريع جداً لتجنب تعليق المعالج
         size_t len = sizeof(blockedLibraries) / sizeof(blockedLibraries[0]);
         for (size_t i = 0; i < len; i++) {
             if (strstr(s1, blockedLibraries[i]) || strstr(s2, blockedLibraries[i])) {
-                return 1; // إيهام النظام بعدم المطابقة
+                return 1; 
             }
         }
     }
     return orig_strcmp(s1, s2);
 }
 
-// هوك حماية الشهادة ومنع الـ Revoke الغيابي
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
     if (isShieldActive && node != NULL) {
@@ -74,7 +73,6 @@ int my_getaddrinfo(const char *node, const char *service, const struct addrinfo 
     return orig_getaddrinfo(node, service, hints, res);
 }
 
-// هوك دالة open الآمن لتخطي النزاهة
 static int (*orig_open)(const char *path, int oflag, mode_t mode);
 int my_open(const char *path, int oflag, mode_t mode) {
     if (isShieldActive && path != NULL) {
@@ -90,7 +88,6 @@ int my_open(const char *path, int oflag, mode_t mode) {
 // =================================================================
 
 void ExecuteHeavyOperations() {
-    // 1. مسح ملفات السجلات الحساسة بصمت
     NSArray *paths = @[
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Logs", NSHomeDirectory()],
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()],
@@ -108,15 +105,13 @@ void ExecuteHeavyOperations() {
         if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil]; 
     }
 
-    // 2. تفعيل الباتش الذكي لتعطيل anogs وغيرها
-    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; // MOV W0, #0
+    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; 
     uint32_t count = _dyld_image_count();
     for (uint32_t i = 0; i < count; i++) {
         const char* name = _dyld_get_image_name(i);
         if (name && strstr(name, "anogs")) {
             uintptr_t base = _dyld_get_image_vmaddr_slide(i);
             if (base > 0x100000000) {
-                // باتش آمن في مساحة 4 ميجا من مكتبة anogs
                 for (uintptr_t curr = base; curr < base + 0x400000; curr += 4) {
                     if (*(uint32_t*)curr == 0x52800008 || *(uint32_t*)curr == 0x52800009) {
                         patch_memory(curr, SMART_PATCH, 4);
@@ -134,7 +129,6 @@ void ExecuteHeavyOperations() {
 void ActivateMasterShield() {
     if (isShieldActive) return;
     
-    // 1. تفعيل الهوكات (العملية الفورية)
     struct rebinding rebinds[] = {
         {"strcmp", (void*)my_strcmp, (void**)&orig_strcmp},
         {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo},
@@ -144,12 +138,10 @@ void ActivateMasterShield() {
     
     isShieldActive = true;
 
-    // 2. تحديث شكل الزر (يجب أن يكون في הMain Thread)
     dispatch_async(dispatch_get_main_queue(), ^{
         [floatingBtn setTitle:@"🛡️ ON" forState:UIControlStateNormal];
         floatingBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.6 blue:0.0 alpha:0.8];
         
-        // تأثير اهتزاز بسيط للتأكيد
         CABasicAnimation *shake = [CABasicAnimation animationWithKeyPath:@"position"];
         shake.duration = 0.1;
         shake.repeatCount = 2;
@@ -159,7 +151,6 @@ void ActivateMasterShield() {
         [floatingBtn.layer addAnimation:shake forKey:@"position"];
     });
 
-    // 3. تشغيل الباتشات الثقيلة في مسار خلفي لتجنب كراش اللعبة
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         ExecuteHeavyOperations();
         NSLog(@"[AMAR] Nuclear Shield Activated Successfully!");
@@ -178,8 +169,6 @@ void ActivateMasterShield() {
 + (void)initializeUI {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
-        
-        // جلب النافذة بنظام iOS 18 الآمن
         for (UIWindowScene* scene in [UIApplication sharedApplication].connectedScenes) {
             if (scene.activationState == UISceneActivationStateForegroundActive) {
                 win = scene.windows.firstObject; 
@@ -188,20 +177,17 @@ void ActivateMasterShield() {
         }
         if (!win) return;
 
-        // تصميم الزر العائم
         floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         [floatingBtn setTitle:@"🛡️ OFF" forState:UIControlStateNormal];
-        floatingBtn.frame = CGRectMake(30, 100, 60, 60); // حجم أصغر وأكثر أناقة
+        floatingBtn.frame = CGRectMake(30, 100, 60, 60); 
         floatingBtn.backgroundColor = [UIColor colorWithRed:0.7 green:0.0 blue:0.0 alpha:0.8];
-        floatingBtn.layer.cornerRadius = 30; // دائري 100%
+        floatingBtn.layer.cornerRadius = 30; 
         floatingBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
         floatingBtn.layer.borderWidth = 2.0;
         floatingBtn.layer.borderColor = [UIColor whiteColor].CGColor;
         
-        // ربط النقرة
         [floatingBtn addTarget:self action:@selector(buttonClicked) forControlEvents:UIControlEventTouchUpInside];
         
-        // ربط السحب
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         [floatingBtn addGestureRecognizer:pan];
         
@@ -221,7 +207,6 @@ void ActivateMasterShield() {
 }
 @end
 
-// المُنطلق الأول في الذاكرة
 __attribute__((constructor)) static void inject_amar_shield() { 
     [AmarAtoZUI initializeUI]; 
 }
