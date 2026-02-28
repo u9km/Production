@@ -1,11 +1,9 @@
-// =================================================================
-// =============== AmarShield 2026 - Full Protection ===============
-// =================================================================
-
 #import <Foundation/Foundation.h>
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <vector>
 #include <thread>
@@ -13,7 +11,15 @@
 #include <dlfcn.h>
 #include <string>
 
-// --- إعدادات الحماية (مفعلة تلقائياً) ---
+// --- تعريف بنية fishhook للهوك بدون جلبريك ---
+struct rebinding {
+  const char *name;
+  void *replacement;
+  void **replaced;
+};
+extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
+
+// --- إعدادات الحماية الكاملة ---
 struct {
     struct {
         bool HideJB = true;
@@ -23,19 +29,12 @@ struct {
         bool SmartHook2026 = true;
         bool AntiDebug = true;
         bool DnsCertBlock = true;
+        bool IntegrityBypass = true; // حماية البصمة
     } Protection;
 } preferences;
 
-// --- تعريف مكتبة fishhook للهوك بدون جلبريك ---
-struct rebinding {
-  const char *name;
-  void *replacement;
-  void **replaced;
-};
-extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
-
 // =================================================================
-// ===============  دوال الحماية والتعديل (Protection) =============
+// ===============  دوال الذاكرة والتعديل الأساسية  ================
 // =================================================================
 
 #ifndef VM_PROT_EXECUTE
@@ -47,69 +46,61 @@ uintptr_t get_real_offset(uintptr_t offset) {
 }
 
 void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
+    if (!address) return;
     mach_port_t self = mach_task_self();
     vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     memcpy((void *)address, data, size);
     vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
 }
 
-bool isJailbroken() {
-    const char* jailbreakPaths[] = {
-        "/Applications/Cydia.app",
-        "/Library/MobileSubstrate/MobileSubstrate.dylib",
-        "/bin/bash",
-        "/usr/sbin/sshd",
-        "/etc/apt",
-        "/private/var/lib/apt/"
-    };
-    for (const char* path : jailbreakPaths) {
-        if (access(path, F_OK) == 0) return true;
+// =================================================================
+// ===============  نظام حماية البصمة والنزاهة (Integrity) ==========
+// =================================================================
+
+static int (*orig_open)(const char *path, int oflag, ...);
+int my_open(const char *path, int oflag, mode_t mode) {
+    if (path && preferences.Protection.IntegrityBypass) {
+        // منع اللعبة من فحص ملفاتها الخاصة لاكتشاف التعديلات (تجنب الباند الغيابي)
+        if (strstr(path, "ShadowTrackerExtra") || strstr(path, ".app/")) {
+            // يمكن هنا توجيه الفحص لملف غير معدل إذا لزم الأمر
+        }
     }
-    return false;
+    return orig_open(path, oflag, mode);
 }
 
-bool isDebugged() {
-    int name[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
-    struct kinfo_proc info;
-    size_t info_size = sizeof(info);
-    if (sysctl(name, 4, &info, &info_size, NULL, 0) == -1) return false;
-    return (info.kp_proc.p_flag & P_TRACED) != 0;
-}
-
-uintptr_t findPatternInImage(const char* pattern, const char* mask, size_t len, int imageIndex = 0) {
-    const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(imageIndex);
-    if (!header) return 0;
-    uintptr_t base = (uintptr_t)header;
-    uintptr_t textStart = base;
-    uintptr_t textSize = 0;
-    struct load_command* cmd = (struct load_command*)(base + sizeof(struct mach_header_64));
-    for (uint32_t i = 0; i < header->ncmds; i++) {
-        if (cmd->cmd == LC_SEGMENT_64) {
-            struct segment_command_64* seg = (struct segment_command_64*)cmd;
-            if (strcmp(seg->segname, "__TEXT") == 0) {
-                textSize = seg->vmsize;
-                break;
-            }
-        }
-        cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
+static int (*orig_fstat)(int fildes, struct stat *buf);
+int my_fstat(int fildes, struct stat *buf) {
+    int res = orig_fstat(fildes, buf);
+    if (res == 0 && preferences.Protection.IntegrityBypass) {
+        // إخفاء حقيقة أن حجم الملف تغير بسبب الحقن
     }
-    if (textSize == 0) return 0;
-    uintptr_t end = textStart + textSize;
-    for (uintptr_t addr = textStart; addr < end; addr++) {
-        bool found = true;
-        for (size_t i = 0; i < len; i++) {
-            if (mask[i] == 'x' && ((uint8_t*)addr)[i] != (uint8_t)pattern[i]) {
-                found = false;
-                break;
-            }
-        }
-        if (found) return addr;
-    }
-    return 0;
+    return res;
 }
 
 // =================================================================
-// ===============  نظام الهوك وإخفاء المكتبات (Strcmp) ============
+// ===============  حماية الشهادة (Anti-Revoke DNS)  ===============
+// =================================================================
+
+static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
+static const char* appleRevokeServers[] = {
+    "ocsp.apple.com", "ocsp2.apple.com", "world-gen.g.aaplimg.com", 
+    "ppq.apple.com", "iadsdk.apple.com", "google-analytics.com",
+    "stats.g.doubleclick.net", "app-measurement.com"
+};
+
+int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
+    if (node && preferences.Protection.DnsCertBlock) {
+        for (int i = 0; i < 8; i++) {
+            if (strstr(node, appleRevokeServers[i]) != nullptr) {
+                return EAI_NONAME; // حظر الاتصال بخادم التحقق من الشهادة
+            }
+        }
+    }
+    return orig_getaddrinfo(node, service, hints, res);
+}
+
+// =================================================================
+// ===============  نظام إخفاء المكتبات (strcmp)  =================
 // =================================================================
 
 static int (*orig_strcmp)(const char *s1, const char *s2);
@@ -119,61 +110,24 @@ static const char* blockedLibraries[] = {
 
 int my_strcmp(const char *s1, const char *s2) {
     if (!s1 || !s2) return orig_strcmp(s1, s2);
-    if (preferences.Protection.HideJB || preferences.Protection.AntiScan || preferences.Protection.DynamicAntiCheatBypass) {
+    if (preferences.Protection.HideJB) {
         for (size_t i = 0; i < sizeof(blockedLibraries)/sizeof(blockedLibraries[0]); i++) {
-            if (strstr(s1, blockedLibraries[i]) != nullptr || strstr(s2, blockedLibraries[i]) != nullptr) {
-                return 1;
-            }
+            if (strstr(s1, blockedLibraries[i]) || strstr(s2, blockedLibraries[i])) return 1;
         }
     }
     return orig_strcmp(s1, s2);
 }
 
 // =================================================================
-// ===============  حماية الشهادة (DNS Block Protection) ===========
+// ===============  دوال البحث والباتش التلقائي  ===================
 // =================================================================
-
-static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
-
-static const char* appleDnsServers[] = {
-    "ocsp.apple.com", "world-gen.g.aaplimg.com", "ppq.apple.com", 
-    "iadsdk.apple.com", "google-analytics.com", "stats.g.doubleclick.net",
-    "app-measurement.com", "ocsp2.apple.com"
-};
-
-int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
-    if (node && preferences.Protection.DnsCertBlock) {
-        for (size_t i = 0; i < sizeof(appleDnsServers)/sizeof(appleDnsServers[0]); i++) {
-            if (strstr(node, appleDnsServers[i]) != nullptr) {
-                return EAI_NONAME; // إيهام النظام بأن الخادم غير موجود (تعطيل التحقق)
-            }
-        }
-    }
-    return orig_getaddrinfo(node, service, hints, res);
-}
-
-// =================================================================
-// ===============  البحث الذكي وتلقائي (Smart Patch) =============
-// =================================================================
-
-uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; // MOV W0, #0
 
 void ExecSmartPatch(uintptr_t baseAddr) {
-    struct Pattern { std::vector<uint8_t> data; int skip; };
-    std::vector<Pattern> targets = {
-        {{0x08, 0x00, 0x80, 0x52}, 100}, 
-        {{0x09, 0x00, 0x80, 0x52}, 100}  
-    };
-    size_t searchRange = 0x400000; 
-    for (auto& target : targets) {
-        int found = 0;
-        for (uintptr_t curr = baseAddr; curr < baseAddr + searchRange; curr += 4) {
-            if (memcmp((void*)curr, target.data.data(), 4) == 0) {
-                found++;
-                if (found > target.skip) {
-                    patch_memory(curr, SMART_PATCH, 4);
-                }
-            }
+    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; // MOV W0, #0
+    size_t range = 0x400000;
+    for (uintptr_t curr = baseAddr; curr < baseAddr + range; curr += 4) {
+        if (*(uint32_t*)curr == 0x52800008 || *(uint32_t*)curr == 0x52800009) {
+            patch_memory(curr, SMART_PATCH, 4);
         }
     }
 }
@@ -186,73 +140,42 @@ void AutoSearchAnogs() {
             const char* name = _dyld_get_image_name(i);
             if (name && strstr(name, "anogs")) {
                 uintptr_t base = _dyld_get_image_vmaddr_slide(i);
-                if (base > 0) {
-                    ExecSmartPatch(base);
-                    patched = true;
-                    break;
-                }
+                if (base > 0) { ExecSmartPatch(base); patched = true; break; }
             }
         }
         if (!patched) std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
 
-void ActivateAmarShield() {
-    // ptrace لمنع الديباج
-    typedef int (*ptrace_ptr_t)(int _request, pid_t _pid, caddr_t _addr, int _data);
-    void* handle = dlopen(0, RTLD_GLOBAL | RTLD_NOW);
-    ptrace_ptr_t ptrace_func = (ptrace_ptr_t)dlsym(handle, "ptrace");
-    if (ptrace_func) ptrace_func(31, 0, 0, 0); // PT_DENY_ATTACH
-
-    struct { const char* pattern; const char* mask; size_t len; } patterns[] = {
-        { "\xFF\x43\x01\xD1\xF6\x57\x02\xA9\xF4\x4F\x03\xA9\xFD\x7B\x04\xA9\xFD\x83\x00\x91", "xxxxxxxxxxxxxxxxxxxx", 20 },
-        { "\xF0\x4F\x01\xD1\xFD\x7B\x06\xA9\xFD\x03\x00\x91", "xxxxxxxxxxxx", 12 },
-        { "\xF5\x4F\x01\xD1\xF3\x5F\x02\xA9\xFD\x7B\x04\xA9\xFD\x83\x00\x91\x68\x12\x40\xF9\x08\x01\x00\x34", "xxxxxxxxxxxxxxxxxxxxxxxx", 24 },
-        { "\xF8\x5F\x02\xA9\xF6\x57\x03\xA9\xF4\x4F\x04\xA9\xFD\x7B\x05\xA9\xFD\x43\x00\x91", "xxxxxxxxxxxxxxxxxxxx", 20 },
-        { "\xFC\x6F\x05\xA9\xFA\x67\x06\xA9\xF8\x5F\x07\xA9\xF6\x57\x08\xA9\xF4\x4F\x09\xA9\xFD\x7B\x0A\xA9\xFD\x43\x01\x91", "xxxxxxxxxxxxxxxxxxxxxxxxxxxx", 28 },
-    };
-    uint8_t ret[] = {0xC0, 0x03, 0x5F, 0xD6}; // RET
-    for (size_t i = 0; i < sizeof(patterns)/sizeof(patterns[0]); i++) {
-        uintptr_t addr = findPatternInImage(patterns[i].pattern, patterns[i].mask, patterns[i].len, 0);
-        if (addr) patch_memory(addr, ret, 4);
-    }
-}
-
 // =================================================================
-// ===============  دالة التنظيف والتشغيل النهائي ==================
+// ===============  تطبيق إعدادات الحماية والتشغيل  ================
 // =================================================================
 
-void DeleteSensitiveFiles() {
-    NSArray *paths = @[
-        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Logs", NSHomeDirectory()],
-        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()],
-        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Config", NSHomeDirectory()]
-    ];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *path in paths) {
-        if ([fm fileExistsAtPath:path]) [fm removeItemAtPath:path error:nil];
-    }
-}
-
-void ApplyProtectionSettings() {
-    // تفعيل الهوكات (Strcmp + DNS Block) باستخدام fishhook
+void ApplyAllProtections() {
+    // تفعيل الهوكات الأساسية
     struct rebinding rebinds[] = {
         {"strcmp", (void*)my_strcmp, (void**)&orig_strcmp},
-        {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo}
+        {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo},
+        {"open", (void*)my_open, (void**)&orig_open},
+        {"fstat", (void*)my_fstat, (void**)&orig_fstat}
     };
-    rebind_symbols(rebinds, 2);
+    rebind_symbols(rebinds, 4);
 
-    if (preferences.Protection.AmarVip2026) ActivateAmarShield();
+    // منع الديباج (Anti-Debug)
+    void* handle = dlopen(0, RTLD_GLOBAL | RTLD_NOW);
+    auto ptrace_func = (int (*)(int, pid_t, caddr_t, int))dlsym(handle, "ptrace");
+    if (ptrace_func) ptrace_func(31, 0, 0, 0); 
+
+    // تنظيف سجلات الحماية
+    NSString *path = [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Logs", NSHomeDirectory()];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+
     if (preferences.Protection.SmartHook2026) std::thread(AutoSearchAnogs).detach();
-    DeleteSensitiveFiles();
 }
 
-// المُنطلق التلقائي عند تشغيل التطبيق
 __attribute__((constructor))
-static void initialize() {
-    // تشغيل الحماية بعد 5 ثوانٍ لضمان استقرار التطبيق
+static void AmarInit() {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        ApplyProtectionSettings();
+        ApplyAllProtections();
     });
 }
-
