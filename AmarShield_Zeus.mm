@@ -18,10 +18,12 @@ struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
 static bool isShieldActive = false;
-static UIButton *floatingBtn;
+static UIView *floatingContainer;
+static UIButton *shieldBtn;
+static UIButton *cleanBtn;
 
 // =================================================================
-// ===============  دوال الذاكرة الآمنة (مع حدود الفحص) ============
+// ===============  دوال الذاكرة الآمنة 100%  ======================
 // =================================================================
 
 void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
@@ -48,7 +50,6 @@ uintptr_t findPatternInImage(const char* pattern, const char* mask, size_t len, 
         cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
     }
     
-    // تأمين ضد قراءة ذاكرة خارج الحدود (سبب الكراش)
     if (textSize < len || textSize == 0) return 0; 
     
     for (uintptr_t addr = base; addr <= base + textSize - len; addr++) {
@@ -62,7 +63,7 @@ uintptr_t findPatternInImage(const char* pattern, const char* mask, size_t len, 
 }
 
 // =================================================================
-// ===============  المصفوفة الكاملة للمكتبات المحظورة  ============
+// ===============  المصفوفة الكاملة للمكتبات  =====================
 // =================================================================
 
 static const char* blockedLibraries[] = {
@@ -70,7 +71,7 @@ static const char* blockedLibraries[] = {
 };
 
 // =================================================================
-// ===============  الهوكات المستقرة (بدون هوك Open المزعج) ========
+// ===============  الهوكات الأساسية (الشهادة والمكتبات) ===========
 // =================================================================
 
 static int (*orig_strcmp)(const char *s1, const char *s2);
@@ -87,7 +88,6 @@ int my_strcmp(const char *s1, const char *s2) {
     return orig_strcmp(s1, s2);
 }
 
-// حماية الشهادة ومنع الـ Revoke
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
     if (isShieldActive && node) {
@@ -100,16 +100,30 @@ int my_getaddrinfo(const char *node, const char *service, const struct addrinfo 
 }
 
 // =================================================================
-// ===============  التنظيف والبحث الآمن عن Anogs  =================
+// ===============  دوال التنظيف (لزر التنظيف المنفصل)  ============
 // =================================================================
 
-void DeleteSensitiveFiles() {
+void ExecuteCleaning() {
     NSArray *paths = @[
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Logs", NSHomeDirectory()],
-        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()]
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Config", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Pandora", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Pandora2", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Config.ini", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/NetLogin.cfg", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/RoleInfo.ini", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/PlayerPrefs", NSHomeDirectory()],
+        [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/Table", NSHomeDirectory()]
     ];
-    for (NSString *p in paths) { [[NSFileManager defaultManager] removeItemAtPath:p error:nil]; }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *p in paths) { if ([fm fileExistsAtPath:p]) [fm removeItemAtPath:p error:nil]; }
+    NSLog(@"[AMAR] Cleaned sensitive files successfully!");
 }
+
+// =================================================================
+// ===============  دوال الباتش (لزر الحماية)  =====================
+// =================================================================
 
 void ExecSmartPatchSafe(uint32_t imageIndex) {
     const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(imageIndex);
@@ -125,12 +139,9 @@ void ExecSmartPatchSafe(uint32_t imageIndex) {
         }
         cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
     }
-
     if (textSize == 0) return;
 
-    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; // MOV W0, #0
-    
-    // البحث فقط داخل مساحة المكتبة الحقيقية لتجنب الكراش
+    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; 
     for (uintptr_t curr = baseAddr; curr < baseAddr + textSize - 4; curr += 4) {
         uint32_t val = *(uint32_t*)curr;
         if (val == 0x52800008 || val == 0x52800009) {
@@ -155,37 +166,31 @@ void ActivateAmarOriginalPatterns() {
 }
 
 // =================================================================
-// ===============  تفعيل الحماية الكاملة من الزر  =================
+// ===============  أحداث الأزرار (Button Actions)  ================
 // =================================================================
 
-void MasterActivation() {
+void ActionTapShield() {
     if (isShieldActive) return;
     
-    // تفعيل الهوكات الآمنة فقط
     struct rebinding r[] = { 
         {"strcmp", (void*)my_strcmp, (void**)&orig_strcmp},
         {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo}
     };
     rebind_symbols(r, 2);
-    
     isShieldActive = true;
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        [floatingBtn setTitle:@"🛡️ ON" forState:UIControlStateNormal];
-        floatingBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.6 blue:0.0 alpha:0.8];
+        [shieldBtn setTitle:@"🛡️ ON" forState:UIControlStateNormal];
+        shieldBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.6 blue:0.0 alpha:0.9];
         CABasicAnimation *shake = [CABasicAnimation animationWithKeyPath:@"position"];
         shake.duration = 0.08; shake.repeatCount = 2; shake.autoreverses = YES;
-        shake.fromValue = [NSValue valueWithCGPoint:CGPointMake(floatingBtn.center.x-5, floatingBtn.center.y)];
-        shake.toValue = [NSValue valueWithCGPoint:CGPointMake(floatingBtn.center.x+5, floatingBtn.center.y)];
-        [floatingBtn.layer addAnimation:shake forKey:@"position"];
+        shake.fromValue = [NSValue valueWithCGPoint:CGPointMake(shieldBtn.center.x-5, shieldBtn.center.y)];
+        shake.toValue = [NSValue valueWithCGPoint:CGPointMake(shieldBtn.center.x+5, shieldBtn.center.y)];
+        [shieldBtn.layer addAnimation:shake forKey:@"position"];
     });
 
-    // تنفيذ المهام الثقيلة في مسار خلفي
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        DeleteSensitiveFiles();
         ActivateAmarOriginalPatterns();
-        
-        // البحث عن anogs وتطبيق الباتش
         uint32_t count = _dyld_image_count();
         for (uint32_t i = 0; i < count; i++) {
             const char* name = _dyld_get_image_name(i);
@@ -197,16 +202,33 @@ void MasterActivation() {
     });
 }
 
+void ActionTapClean() {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        ExecuteCleaning(); // تنظيف الملفات في الخلفية
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [cleanBtn setTitle:@"✨ Done" forState:UIControlStateNormal];
+            cleanBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.7 blue:0.0 alpha:0.9];
+            
+            // إعادة الزر لشكله الطبيعي بعد ثانيتين
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [cleanBtn setTitle:@"🧹 Clean" forState:UIControlStateNormal];
+                cleanBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.4 blue:0.8 alpha:0.9];
+            });
+        });
+    });
+}
+
 // =================================================================
-// ===============  زر التفعيل المتطور (تأخير 15 ثانية)  ===========
+// ===============  تصميم واجهة لوحة التحكم المزدوجة  ==============
 // =================================================================
 
-@interface AmarProMaxUI : NSObject
-+ (void)showAdvancedButton;
+@interface AmarDualPanelUI : NSObject
++ (void)showPanel;
 @end
 
-@implementation AmarProMaxUI
-+ (void)showAdvancedButton {
+@implementation AmarDualPanelUI
++ (void)showPanel {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
         for (UIWindowScene* s in [UIApplication sharedApplication].connectedScenes) {
@@ -214,20 +236,40 @@ void MasterActivation() {
         }
         if (!win) return;
         
-        floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        [floatingBtn setTitle:@"🛡️ OFF" forState:UIControlStateNormal];
-        floatingBtn.frame = CGRectMake(50, 150, 70, 70);
-        floatingBtn.backgroundColor = [UIColor colorWithRed:0.7 green:0.0 blue:0.0 alpha:0.8];
-        floatingBtn.layer.cornerRadius = 35;
-        floatingBtn.layer.borderWidth = 2;
-        floatingBtn.layer.borderColor = [UIColor whiteColor].CGColor;
-        floatingBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+        // 1. الحاوية الأساسية القابلة للسحب
+        floatingContainer = [[UIView alloc] initWithFrame:CGRectMake(50, 150, 150, 70)];
+        floatingContainer.backgroundColor = [UIColor clearColor];
         
-        [floatingBtn addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+        // 2. زر الحماية (اليسار)
+        shieldBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        shieldBtn.frame = CGRectMake(0, 0, 70, 70);
+        [shieldBtn setTitle:@"🛡️ OFF" forState:UIControlStateNormal];
+        shieldBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.0 blue:0.0 alpha:0.9];
+        shieldBtn.layer.cornerRadius = 35;
+        shieldBtn.layer.borderWidth = 2;
+        shieldBtn.layer.borderColor = [UIColor whiteColor].CGColor;
+        shieldBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+        [shieldBtn addTarget:self action:@selector(tapShield) forControlEvents:UIControlEventTouchUpInside];
+        
+        // 3. زر التنظيف (اليمين)
+        cleanBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        cleanBtn.frame = CGRectMake(80, 0, 70, 70); // مسافة 10 بكسل بين الزرين
+        [cleanBtn setTitle:@"🧹 Clean" forState:UIControlStateNormal];
+        cleanBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.4 blue:0.8 alpha:0.9];
+        cleanBtn.layer.cornerRadius = 35;
+        cleanBtn.layer.borderWidth = 2;
+        cleanBtn.layer.borderColor = [UIColor whiteColor].CGColor;
+        cleanBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+        [cleanBtn addTarget:self action:@selector(tapClean) forControlEvents:UIControlEventTouchUpInside];
+        
+        [floatingContainer addSubview:shieldBtn];
+        [floatingContainer addSubview:cleanBtn];
+        
+        // تفعيل السحب على الحاوية بالكامل
         UIPanGestureRecognizer *p = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
-        [floatingBtn addGestureRecognizer:p];
+        [floatingContainer addGestureRecognizer:p];
         
-        [win addSubview:floatingBtn];
+        [win addSubview:floatingContainer];
     });
 }
 
@@ -237,9 +279,10 @@ void MasterActivation() {
     [p setTranslation:CGPointZero inView:p.view.superview];
 }
 
-+ (void)tap { MasterActivation(); }
++ (void)tapShield { ActionTapShield(); }
++ (void)tapClean { ActionTapClean(); }
 @end
 
-__attribute__((constructor)) static void init_amar_shield() { 
-    [AmarProMaxUI showAdvancedButton]; 
+__attribute__((constructor)) static void init_dual_panel() { 
+    [AmarDualPanelUI showPanel]; 
 }
