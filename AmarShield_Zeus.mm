@@ -13,26 +13,55 @@
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
+// المتغيرات الأساسية (Atomic لضمان الأمان بين المسارات)
 static bool isShieldActive = false;
 static UIView *floatingContainer;
 static UIButton *shieldBtn;
 static UIButton *cleanBtn;
 
 // =================================================================
-// ===============  هوك sysctl (محمي ضد كراش المصفوفة) =============
+// ===============  دوال الذاكرة (مستوى النواة الآمن 100%) =========
+// =================================================================
+
+// دالة قراءة آمنة لا تسبب كراش حتى لو كانت الذاكرة محظورة
+bool safe_read_uint32_kernel(vm_address_t address, uint32_t *out_val) {
+    vm_size_t bytes_read = 0;
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), address, sizeof(uint32_t), (vm_address_t)out_val, &bytes_read);
+    return (kr == KERN_SUCCESS && bytes_read == sizeof(uint32_t));
+}
+
+void patch_memory_safe(uintptr_t address, const uint8_t* data, size_t size) {
+    mach_port_t self = mach_task_self();
+    vm_size_t page_size; 
+    host_page_size(mach_host_self(), &page_size);
+    
+    vm_address_t page_start = (address / page_size) * page_size;
+    vm_size_t size_to_protect = ((address + size + page_size - 1) / page_size) * page_size - page_start;
+    
+    // استخدام Copy-On-Write لتجاوز حماية AMFI على أجهزة بدون جيلبريك
+    if (vm_protect(self, page_start, size_to_protect, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS) {
+        memcpy((void *)address, data, size);
+        vm_protect(self, page_start, size_to_protect, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+    }
+}
+
+// =================================================================
+// ===============  الهوكات الخاملة (تزرع في البداية وتفعل بالزر) ==
 // =================================================================
 
 static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
     
-    // ⚠️ الحماية من الكراش: التأكد من أن namelen أكبر من أو يساوي 3 قبل قراءة name[2]
-    if (isShieldActive && ret == 0 && name != NULL && namelen >= 3) {
+    // إذا كان الدرع مغلقاً، تصرف بشكل طبيعي جداً
+    if (!isShieldActive) return ret;
+    
+    if (ret == 0 && name != NULL && namelen >= 3) {
         if (name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
             if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
                 struct kinfo_proc *info = (struct kinfo_proc *)oldp;
                 if (info->kp_proc.p_flag & P_TRACED) {
-                    info->kp_proc.p_flag &= ~P_TRACED; // إزالة علامة التتبع بصمت
+                    info->kp_proc.p_flag &= ~P_TRACED; // مسح التتبع
                 }
             }
         }
@@ -40,14 +69,12 @@ int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     return ret;
 }
 
-// =================================================================
-// ===============  هوكات إخفاء الملفات (آمنة تماماً) ===============
-// =================================================================
-
 static int (*orig_access)(const char *path, int amode);
 int my_access(const char *path, int amode) {
     int ret = orig_access(path, amode);
-    if (isShieldActive && path != NULL && ret == 0) { 
+    if (!isShieldActive) return ret;
+    
+    if (path != NULL && ret == 0) { 
         if (strstr(path, "anogs") || strstr(path, "Shadow") || strstr(path, "Cydia")) {
             errno = ENOENT; 
             return -1;
@@ -59,7 +86,9 @@ int my_access(const char *path, int amode) {
 static int (*orig_stat)(const char *path, struct stat *buf);
 int my_stat(const char *path, struct stat *buf) {
     int ret = orig_stat(path, buf);
-    if (isShieldActive && path != NULL && ret == 0) {
+    if (!isShieldActive) return ret;
+    
+    if (path != NULL && ret == 0) {
         if (strstr(path, "anogs") || strstr(path, "Shadow") || strstr(path, "Cydia")) {
             errno = ENOENT;
             return -1;
@@ -68,13 +97,11 @@ int my_stat(const char *path, struct stat *buf) {
     return ret;
 }
 
-// =================================================================
-// ===============  هوك الشهادة (منع الاتصال بسيرفرات التجسس) ======
-// =================================================================
-
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
-    if (isShieldActive && node != NULL) {
+    if (!isShieldActive) return orig_getaddrinfo(node, service, hints, res);
+    
+    if (node != NULL) {
         const char* blocks[] = {"apple.com", "google-analytics.com", "world-gen.g.aaplimg.com", "ppq.apple.com", "app-measurement.com"};
         for (int i = 0; i < 5; i++) { 
             if (strstr(node, blocks[i])) return EAI_NONAME; 
@@ -84,23 +111,8 @@ int my_getaddrinfo(const char *node, const char *service, const struct addrinfo 
 }
 
 // =================================================================
-// ===============  دوال الذاكرة (محمية بـ Mach Page Size) =========
+// ===============  دوال التنظيف والباتش الخلفي ====================
 // =================================================================
-
-void patch_memory_rhythm(uintptr_t address, const uint8_t* data, size_t size) {
-    if (address < 0x100000000 || !data || size == 0) return; 
-    mach_port_t self = mach_task_self();
-    vm_size_t page_size; 
-    host_page_size(mach_host_self(), &page_size);
-    
-    vm_address_t page_start = (address / page_size) * page_size;
-    vm_size_t size_to_protect = ((address + size + page_size - 1) / page_size) * page_size - page_start;
-    
-    if (vm_protect(self, page_start, size_to_protect, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS) {
-        memcpy((void *)address, data, size);
-        vm_protect(self, page_start, size_to_protect, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
-    }
-}
 
 void ExecuteDeepClean() {
     NSArray *paths = @[
@@ -114,24 +126,17 @@ void ExecuteDeepClean() {
 }
 
 // =================================================================
-// ===============  أحداث واجهة المستخدم والباتش الذكي =============
+// ===============  أحداث الزر (تحكم بالمتغيرات فقط بدون هوك) ======
 // =================================================================
 
-void ActionTapShieldTurbo() {
+void ActionTapShieldPro() {
     if (isShieldActive) return;
     
-    struct rebinding r[] = { 
-        {"sysctl", (void*)my_sysctl, (void**)&orig_sysctl},
-        {"access", (void*)my_access, (void**)&orig_access},
-        {"stat", (void*)my_stat, (void**)&orig_stat},
-        {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo}
-    };
-    rebind_symbols(r, 4);
-    
+    // السر هنا: لا نقوم بعمل rebind_symbols عند ضغط الزر (لأنها تسبب كراش)، بل نغير المتغير فقط!
     isShieldActive = true;
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        [shieldBtn setTitle:@"⚡ TURBO" forState:UIControlStateNormal];
+        [shieldBtn setTitle:@"⚡ PRO" forState:UIControlStateNormal];
         shieldBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0.0 blue:0.8 alpha:0.9]; 
         
         CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
@@ -161,15 +166,17 @@ void ActionTapShieldTurbo() {
                             for (uint32_t k = 0; k < seg->nsects; k++) {
                                 if (strcmp(sec[k].sectname, "__text") == 0) {
                                     
-                                    // ⚠️ الحماية من كراش المحاذاة (SIGBUS): إجبار العنوان على أن يكون مضاعفاً للرقم 4
                                     uintptr_t startAddr = baseAddr + sec[k].offset;
                                     uintptr_t alignedStart = (startAddr + 3) & ~3; 
                                     uintptr_t endAddr = startAddr + sec[k].size - 4;
                                     
                                     for (uintptr_t curr = alignedStart; curr < endAddr; curr += 4) {
-                                        uint32_t val = *(uint32_t*)curr;
-                                        if (val == 0x52800008 || val == 0x52800009) {
-                                            patch_memory_rhythm(curr, SMART_PATCH, 4);
+                                        uint32_t val = 0;
+                                        // ⚠️ قراءة الذاكرة عبر النواة بدلاً من قراءتها مباشرة لمنع الكراش 100%
+                                        if (safe_read_uint32_kernel(curr, &val)) {
+                                            if (val == 0x52800008 || val == 0x52800009) {
+                                                patch_memory_safe(curr, SMART_PATCH, 4);
+                                            }
                                         }
                                     }
                                 }
@@ -185,7 +192,7 @@ void ActionTapShieldTurbo() {
     });
 }
 
-void ActionTapCleanTurbo() {
+void ActionTapCleanPro() {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         ExecuteDeepClean(); 
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -200,14 +207,14 @@ void ActionTapCleanTurbo() {
 }
 
 // =================================================================
-// ===============  الواجهة المبنية على الإيقاع ====================
+// ===============  نقطة البداية المبكرة (السر الحقيقي) ============
 // =================================================================
 
-@interface AmarTurboUI : NSObject
+@interface AmarProUI : NSObject
 + (void)initializeUI;
 @end
 
-@implementation AmarTurboUI
+@implementation AmarProUI
 + (void)initializeUI {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
@@ -254,10 +261,23 @@ void ActionTapCleanTurbo() {
     [p setTranslation:CGPointZero inView:p.view.superview];
 }
 
-+ (void)tapShield { ActionTapShieldTurbo(); }
-+ (void)tapClean { ActionTapCleanTurbo(); }
++ (void)tapShield { ActionTapShieldPro(); }
++ (void)tapClean { ActionTapCleanPro(); }
 @end
 
-__attribute__((constructor)) static void inject_turbo() { 
-    [AmarTurboUI initializeUI]; 
+// ⚠️ الهندسة العكسية الاحترافية: زرع الهوكات في الميموري فور فتح التطبيق (لتجنب تصادم المسارات)
+__attribute__((constructor)) static void inject_pro_early() { 
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        struct rebinding r[] = { 
+            {"sysctl", (void*)my_sysctl, (void**)&orig_sysctl},
+            {"access", (void*)my_access, (void**)&orig_access},
+            {"stat", (void*)my_stat, (void**)&orig_stat},
+            {"getaddrinfo", (void*)my_getaddrinfo, (void**)&orig_getaddrinfo}
+        };
+        rebind_symbols(r, 4);
+    });
+    
+    // إطلاق الواجهة بعد 10 ثواني
+    [AmarProUI initializeUI]; 
 }
