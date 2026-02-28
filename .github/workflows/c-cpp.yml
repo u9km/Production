@@ -1,43 +1,33 @@
-name: "Amar Dylib Builder V4 - 2026"
+name: "Amar Shield AtoZ Builder"
 
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # للتشغيل اليدوي من زر Actions
+  workflow_dispatch:
 
 jobs:
   build:
-    # بناء dylib للايفون يتطلب نظام ماك حصراً
     runs-on: macos-latest
-
     steps:
-      # 1. سحب الكود من المستودع الخاص بك
-      - name: Checkout Repository
+      - name: "Checkout Repository"
         uses: actions/checkout@v4
 
-      # 2. إعداد أدوات المطور (Xcode)
-      - name: Setup Xcode Environment
+      - name: "Setup Xcode"
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      # 3. عملية التجميع (Compilation)
-      # هذا الأمر يجمع ملف AmarShield.mm مع fishhook.c لإنتاج dylib متوافق مع الايفون
-      - name: Compile AmarShield Dylib
+      - name: "Compile AmarShield"
         run: |
+          # تأكد من أن أسماء الملفات مطابقة لما في المستودع
           xcrun -sdk iphoneos clang++ -dynamiclib -arch arm64 \
           -miphoneos-version-min=14.0 \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-          -fobjc-arc \
-          -framework Foundation \
-          -framework UIKit \
-          -framework Security \
-          -lc++ \
-          fishhook.c AmarShield.mm -o AmarShield.dylib
+          -fobjc-arc -framework Foundation -framework UIKit -lc++ \
+          fishhook.c AmarShield_AtoZ_Final.mm -o AmarShield.dylib
           
-          echo "✅ تم بناء الملف بنجاح: AmarShield.dylib"
+          echo "✅ Build Complete: AmarShield.dylib created."
 
-      # 4. رفع ملف الـ dylib الناتج لكي تتمكن من تحميله
-      - name: Upload Resulting Dylib
+      - name: "Upload Dylib"
         uses: actions/upload-artifact@v4
         with:
-          name: Amar-NoJailbreak-Dylib
+          name: AmarShield-AtoZ-IPA-Ready
           path: AmarShield.dylib
