@@ -33,7 +33,6 @@ void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
     vm_size_t page_size;
     host_page_size(mach_host_self(), &page_size);
     
-    // الحساب الذكي لبداية صفحة الذاكرة لتجنب أي كراش
     vm_address_t page_start = (address / page_size) * page_size;
     vm_size_t size_to_protect = ((address + size + page_size - 1) / page_size) * page_size - page_start;
     
@@ -44,17 +43,42 @@ void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
     }
 }
 
+uintptr_t findPatternInImage(const char* pattern, const char* mask, size_t len, int imageIndex = 0) {
+    const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(imageIndex);
+    if (!header) return 0;
+    uintptr_t base = (uintptr_t)header;
+    uintptr_t textSize = 0;
+    struct load_command* cmd = (struct load_command*)(base + sizeof(struct mach_header_64));
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        if (cmd->cmd == LC_SEGMENT_64) {
+            struct segment_command_64* seg = (struct segment_command_64*)cmd;
+            if (strcmp(seg->segname, "__TEXT") == 0) { textSize = seg->vmsize; break; }
+        }
+        cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
+    }
+    
+    if (textSize < len || textSize == 0) return 0; 
+    
+    for (uintptr_t addr = base; addr <= base + textSize - len; addr++) {
+        bool found = true;
+        for (size_t i = 0; i < len; i++) {
+            if (mask[i] == 'x' && ((uint8_t*)addr)[i] != (uint8_t)pattern[i]) { found = false; break; }
+        }
+        if (found) return addr;
+    }
+    return 0;
+}
+
 // =================================================================
-// ===============  الهوكات الذكية (بديل strcmp المدمر) ============
+// ===============  الهوكات الذكية (الآمنة ضد الكراش) ==============
 // =================================================================
 
-// 1. إخفاء الملفات والمكتبات بأمان تام (بدون كراش المعالج)
 static int (*orig_access)(const char *path, int amode);
 int my_access(const char *path, int amode) {
     if (isShieldActive && path) {
         if (strstr(path, "anogs") || strstr(path, "Shadow") || strstr(path, "Cydia") || 
             strstr(path, "Substrate") || strstr(path, "Substitute") || strstr(path, "TrollStore")) {
-            return -1; // إيهام نظام الحماية أن الملف غير موجود
+            return -1; 
         }
     }
     return orig_access(path, amode);
@@ -71,7 +95,6 @@ int my_stat(const char *path, struct stat *buf) {
     return orig_stat(path, buf);
 }
 
-// 2. حماية الشهادة والريكوفري (Anti-Revoke)
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
     if (isShieldActive && node) {
@@ -95,7 +118,6 @@ void ExecSmartPatchSafe(uint32_t imageIndex) {
     uintptr_t textSectionStart = 0;
     uintptr_t textSectionSize = 0;
     
-    // البحث الذكي داخل القطاع التنفيذي فقط لمنع قراءة ذاكرة محظورة
     struct load_command* cmd = (struct load_command*)(baseAddr + sizeof(struct mach_header_64));
     for (uint32_t i = 0; i < header->ncmds; i++) {
         if (cmd->cmd == LC_SEGMENT_64) {
@@ -117,7 +139,7 @@ void ExecSmartPatchSafe(uint32_t imageIndex) {
 
     if (textSectionSize == 0) return;
 
-    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; // MOV W0, #0
+    uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; 
     
     for (uintptr_t curr = textSectionStart; curr < textSectionStart + textSectionSize - 4; curr += 4) {
         uint32_t val = *(uint32_t*)curr;
@@ -138,13 +160,23 @@ void ExecuteCleaning() {
     ];
     NSFileManager *fm = [NSFileManager defaultManager];
     for (NSString *p in paths) { if ([fm fileExistsAtPath:p]) [fm removeItemAtPath:p error:nil]; }
-    NSLog(@"[AMAR] Cleaned sensitive files successfully!");
 }
 
 void ActivateAmarOriginalPatterns() {
-    // تم اختصار الأنماط الأصلية للتوضيح، يمكنك إضافة مصفوفتك الكاملة هنا
+    struct { const char* pattern; const char* mask; size_t len; } patterns[] = {
+        { "\xFF\x43\x01\xD1\xF6\x57\x02\xA9\xF4\x4F\x03\xA9\xFD\x7B\x04\xA9\xFD\x83\x00\x91", "xxxxxxxxxxxxxxxxxxxx", 20 },
+        { "\xF0\x4F\x01\xD1\xFD\x7B\x06\xA9\xFD\x03\x00\x91", "xxxxxxxxxxxx", 12 },
+        { "\xF5\x4F\x01\xD1\xF3\x5F\x02\xA9\xFD\x7B\x04\xA9\xFD\x83\x00\x91\x68\x12\x40\xF9\x08\x01\x00\x34", "xxxxxxxxxxxxxxxxxxxxxxxx", 24 },
+        { "\xF8\x5F\x02\xA9\xF6\x57\x03\xA9\xF4\x4F\x04\xA9\xFD\x7B\x05\xA9\xFD\x43\x00\x91", "xxxxxxxxxxxxxxxxxxxx", 20 },
+        { "\xFC\x6F\x05\xA9\xFA\x67\x06\xA9\xF8\x5F\x07\xA9\xF6\x57\x08\xA9\xF4\x4F\x09\xA9\xFD\x7B\x0A\xA9\xFD\x43\x01\x91", "xxxxxxxxxxxxxxxxxxxxxxxxxxxx", 28 }
+    };
     uint8_t ret[] = {0xC0, 0x03, 0x5F, 0xD6}; 
-    // patch_memory(addr, ret, 4);
+    
+    // تم استخدام المتغير ret هنا، مما سيمنع خطأ "unused variable"
+    for (size_t i = 0; i < sizeof(patterns)/sizeof(patterns[0]); i++) {
+        uintptr_t addr = findPatternInImage(patterns[i].pattern, patterns[i].mask, patterns[i].len, 0);
+        if (addr) patch_memory(addr, ret, 4);
+    }
 }
 
 // =================================================================
@@ -154,7 +186,6 @@ void ActivateAmarOriginalPatterns() {
 void ActionTapShield() {
     if (isShieldActive) return;
     
-    // تفعيل الهوكات الذكية (الخفيفة على المعالج)
     struct rebinding r[] = { 
         {"access", (void*)my_access, (void**)&orig_access},
         {"stat", (void*)my_stat, (void**)&orig_stat},
@@ -201,14 +232,14 @@ void ActionTapClean() {
 }
 
 // =================================================================
-// ===============  واجهة لوحة التحكم  =============================
+// ===============  واجهة لوحة التحكم المزدوجة =====================
 // =================================================================
 
 @interface AmarDualPanelUI : NSObject
 + (void)showPanel;
 @end
 
-@implementation AmarDualPanelUI سير
+@implementation AmarDualPanelUI
 + (void)showPanel {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
