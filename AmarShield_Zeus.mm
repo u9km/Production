@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <netdb.h>
-#include <errno.h> // ضروري لعكس قيم النظام بشكل قانوني
+#include <errno.h>
 
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
@@ -19,34 +19,37 @@ static UIButton *shieldBtn;
 static UIButton *cleanBtn;
 
 // =================================================================
-// ===============  عكس قيم الفحص بصمت (Deep Spoofing) =============
+// ===============  هوك sysctl (محمي ضد كراش المصفوفة) =============
 // =================================================================
 
-// 1. تزييف فحص الـ Debugger والنظام (إرجاع قيمة نظيفة 100%)
 static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
     
-    // إذا كان الدرع مفعلاً واللعبة تفحص حالة العمليات (KERN_PROC)
-    if (isShieldActive && ret == 0 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
-        if (oldp) {
-            struct kinfo_proc *info = (struct kinfo_proc *)oldp;
-            // عكس القيمة: نمسح علامة التتبع (P_TRACED) من النتيجة المرجعة دون أن تشعر اللعبة
-            if (info->kp_proc.p_flag & P_TRACED) {
-                info->kp_proc.p_flag &= ~P_TRACED; 
+    // ⚠️ الحماية من الكراش: التأكد من أن namelen أكبر من أو يساوي 3 قبل قراءة name[2]
+    if (isShieldActive && ret == 0 && name != NULL && namelen >= 3) {
+        if (name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
+            if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
+                struct kinfo_proc *info = (struct kinfo_proc *)oldp;
+                if (info->kp_proc.p_flag & P_TRACED) {
+                    info->kp_proc.p_flag &= ~P_TRACED; // إزالة علامة التتبع بصمت
+                }
             }
         }
     }
     return ret;
 }
 
-// 2. عكس مسارات فحص الملفات (محاكاة إيقاع النظام بـ ENOENT)
+// =================================================================
+// ===============  هوكات إخفاء الملفات (آمنة تماماً) ===============
+// =================================================================
+
 static int (*orig_access)(const char *path, int amode);
 int my_access(const char *path, int amode) {
     int ret = orig_access(path, amode);
-    if (isShieldActive && path && ret == 0) { // إذا وجد النظام الملف فعلاً
+    if (isShieldActive && path != NULL && ret == 0) { 
         if (strstr(path, "anogs") || strstr(path, "Shadow") || strstr(path, "Cydia")) {
-            errno = ENOENT; // "عكس القيمة": إجبار النظام على إعلان أن الملف تبخر!
+            errno = ENOENT; 
             return -1;
         }
     }
@@ -56,7 +59,7 @@ int my_access(const char *path, int amode) {
 static int (*orig_stat)(const char *path, struct stat *buf);
 int my_stat(const char *path, struct stat *buf) {
     int ret = orig_stat(path, buf);
-    if (isShieldActive && path && ret == 0) {
+    if (isShieldActive && path != NULL && ret == 0) {
         if (strstr(path, "anogs") || strstr(path, "Shadow") || strstr(path, "Cydia")) {
             errno = ENOENT;
             return -1;
@@ -65,10 +68,13 @@ int my_stat(const char *path, struct stat *buf) {
     return ret;
 }
 
-// 3. قطع نبض السيرفرات التجسسية
+// =================================================================
+// ===============  هوك الشهادة (منع الاتصال بسيرفرات التجسس) ======
+// =================================================================
+
 static int (*orig_getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 int my_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
-    if (isShieldActive && node) {
+    if (isShieldActive && node != NULL) {
         const char* blocks[] = {"apple.com", "google-analytics.com", "world-gen.g.aaplimg.com", "ppq.apple.com", "app-measurement.com"};
         for (int i = 0; i < 5; i++) { 
             if (strstr(node, blocks[i])) return EAI_NONAME; 
@@ -78,13 +84,15 @@ int my_getaddrinfo(const char *node, const char *service, const struct addrinfo 
 }
 
 // =================================================================
-// ===============  دوال الذاكرة (بتناغم تام) ======================
+// ===============  دوال الذاكرة (محمية بـ Mach Page Size) =========
 // =================================================================
 
 void patch_memory_rhythm(uintptr_t address, const uint8_t* data, size_t size) {
     if (address < 0x100000000 || !data || size == 0) return; 
     mach_port_t self = mach_task_self();
-    vm_size_t page_size; host_page_size(mach_host_self(), &page_size);
+    vm_size_t page_size; 
+    host_page_size(mach_host_self(), &page_size);
+    
     vm_address_t page_start = (address / page_size) * page_size;
     vm_size_t size_to_protect = ((address + size + page_size - 1) / page_size) * page_size - page_start;
     
@@ -100,46 +108,18 @@ void ExecuteDeepClean() {
         [NSString stringWithFormat:@"%@/Documents/ShadowTrackerExtra/Saved/MMKV", NSHomeDirectory()]
     ];
     NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *p in paths) { if ([fm fileExistsAtPath:p]) [fm removeItemAtPath:p error:nil]; }
+    for (NSString *p in paths) { 
+        if ([fm fileExistsAtPath:p]) [fm removeItemAtPath:p error:nil]; 
+    }
 }
 
 // =================================================================
-// ===============  التحكم بإيقاع التطبيق (CADisplayLink) ==========
-// =================================================================
-
-@interface AmarTurboEngine : NSObject
-@property (nonatomic, strong) CADisplayLink *rhythmLink;
-+ (instancetype)sharedEngine;
-- (void)startSystemRhythm;
-@end
-
-@implementation AmarTurboEngine
-+ (instancetype)sharedEngine {
-    static AmarTurboEngine *instance = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
-    return instance;
-}
-
-- (void)startSystemRhythm {
-    // ربط الحماية بنبض الشاشة (60/120 إطار في الثانية) لمنع الكراش
-    self.rhythmLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(rhythmTick)];
-    [self.rhythmLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-}
-
-- (void)rhythmTick {
-    // هذه الدالة تنبض مع اللعبة.. يمكننا استخدامها لاحقاً لفحص الذاكرة بهدوء دون مسارات خارجية
-}
-@end
-
-// =================================================================
-// ===============  واجهة المستخدم المرتبطة بالنظام ================
+// ===============  أحداث واجهة المستخدم والباتش الذكي =============
 // =================================================================
 
 void ActionTapShieldTurbo() {
     if (isShieldActive) return;
     
-    // تفعيل الهوكات التي تعكس قيم الفحص
     struct rebinding r[] = { 
         {"sysctl", (void*)my_sysctl, (void**)&orig_sysctl},
         {"access", (void*)my_access, (void**)&orig_access},
@@ -150,12 +130,9 @@ void ActionTapShieldTurbo() {
     
     isShieldActive = true;
     
-    // تشغيل محرك الإيقاع الخاص بنا
-    [[AmarTurboEngine sharedEngine] startSystemRhythm];
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         [shieldBtn setTitle:@"⚡ TURBO" forState:UIControlStateNormal];
-        shieldBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0.0 blue:0.8 alpha:0.9]; // لون ديب ويب 😈
+        shieldBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0.0 blue:0.8 alpha:0.9]; 
         
         CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
         pulse.duration = 0.2; pulse.repeatCount = 1; pulse.autoreverses = YES;
@@ -163,18 +140,19 @@ void ActionTapShieldTurbo() {
         [shieldBtn.layer addAnimation:pulse forKey:@"transform"];
     });
 
-    // باتش الذاكرة الخفيف
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
         uint32_t count = _dyld_image_count();
         uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; 
+        
         for (uint32_t i = 0; i < count; i++) {
             const char* name = _dyld_get_image_name(i);
             if (name && strstr(name, "anogs")) {
                 const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(i);
                 if (!header) continue;
-                uintptr_t baseAddr = (uintptr_t)header;
                 
+                uintptr_t baseAddr = (uintptr_t)header;
                 struct load_command* cmd = (struct load_command*)(baseAddr + sizeof(struct mach_header_64));
+                
                 for (uint32_t j = 0; j < header->ncmds; j++) {
                     if (cmd->cmd == LC_SEGMENT_64) {
                         struct segment_command_64* seg = (struct segment_command_64*)cmd;
@@ -182,8 +160,15 @@ void ActionTapShieldTurbo() {
                             struct section_64* sec = (struct section_64*)((uintptr_t)seg + sizeof(struct segment_command_64));
                             for (uint32_t k = 0; k < seg->nsects; k++) {
                                 if (strcmp(sec[k].sectname, "__text") == 0) {
-                                    for (uintptr_t curr = baseAddr + sec[k].offset; curr < baseAddr + sec[k].offset + sec[k].size - 4; curr += 4) {
-                                        if (*(uint32_t*)curr == 0x52800008 || *(uint32_t*)curr == 0x52800009) {
+                                    
+                                    // ⚠️ الحماية من كراش المحاذاة (SIGBUS): إجبار العنوان على أن يكون مضاعفاً للرقم 4
+                                    uintptr_t startAddr = baseAddr + sec[k].offset;
+                                    uintptr_t alignedStart = (startAddr + 3) & ~3; 
+                                    uintptr_t endAddr = startAddr + sec[k].size - 4;
+                                    
+                                    for (uintptr_t curr = alignedStart; curr < endAddr; curr += 4) {
+                                        uint32_t val = *(uint32_t*)curr;
+                                        if (val == 0x52800008 || val == 0x52800009) {
                                             patch_memory_rhythm(curr, SMART_PATCH, 4);
                                         }
                                     }
@@ -235,7 +220,7 @@ void ActionTapCleanTurbo() {
         floatingContainer.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.85];
         floatingContainer.layer.cornerRadius = 37.5;
         floatingContainer.layer.borderWidth = 1.5;
-        floatingContainer.layer.borderColor = [UIColor purpleColor].CGColor; // لمسة الـ Turbo
+        floatingContainer.layer.borderColor = [UIColor purpleColor].CGColor; 
         floatingContainer.clipsToBounds = YES;
         
         shieldBtn = [UIButton buttonWithType:UIButtonTypeCustom];
