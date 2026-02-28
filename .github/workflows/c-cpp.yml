@@ -1,13 +1,11 @@
-name: "Amar Shield Nuclear Build"
+name: "Amar Shield Final Build"
 on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: "Checkout Code"
-        uses: actions/checkout@v4
-      
-      - name: "Compile Ultimate Dylib"
+      - uses: actions/checkout@v4
+      - name: "Compile Pro Max Dylib"
         run: |
           xcrun -sdk iphoneos clang++ -dynamiclib -arch arm64 \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
@@ -21,10 +19,7 @@ jobs:
           -x objective-c++ AmarShield_AtoZ_Final.mm \
           -o AmarShield.dylib
           
-          echo "✅ Nuclear Build Completed Successfully Without Errors!"
-
-      - name: "Upload Dylib"
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-AtoZ-IPA
-          path: AmarShield.dylib
+          name: AmarShield-Ultimate-IPA
+          path: fullShield.dylib
