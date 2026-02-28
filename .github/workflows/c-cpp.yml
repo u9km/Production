@@ -1,28 +1,30 @@
-name: "Amar Shield AtoZ Builder"
+name: "Amar Shield Nuclear Build"
 on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: "Compile NoJailbreak Dylib"
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+      
+      - name: "Compile Ultimate Dylib"
         run: |
-          # إضافة CoreGraphics و UIKit و Security لضمان اكتمال الربط
           xcrun -sdk iphoneos clang++ -dynamiclib -arch arm64 \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -fobjc-arc \
           -framework Foundation \
           -framework UIKit \
           -framework CoreGraphics \
-          -framework CoreImage \
           -framework Security \
           -lc++ \
           -x c fishhook.c \
           -x objective-c++ AmarShield_AtoZ_Final.mm \
           -o AmarShield.dylib
           
-          echo "✅ Build Success: Ultimate AtoZ Dylib created."
-      - uses: actions/upload-artifact@v4
+          echo "✅ Nuclear Build Completed Successfully!"
+
+      - name: "Upload Dylib"
+        uses: actions/upload-artifact@v4
         with:
           name: AmarShield-AtoZ-IPA
           path: AmarShield.dylib
