@@ -23,16 +23,23 @@ static UIButton *shieldBtn;
 static UIButton *cleanBtn;
 
 // =================================================================
-// ===============  دوال الذاكرة الآمنة 100%  ======================
+// ===============  دوال الذاكرة (محمية ضد الكراش 100%) ============
 // =================================================================
 
 void patch_memory(uintptr_t address, const uint8_t* data, size_t size) {
     if (address < 0x100000000 || !data || size == 0) return; 
+    
     mach_port_t self = mach_task_self();
-    kern_return_t kr = vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+    vm_size_t page_size = 16384; // حجم صفحة الذاكرة الافتراضي في iOS
+    host_page_size(mach_host_self(), &page_size);
+    
+    // محاذاة العنوان لتجنب كراش EXC_BAD_ACCESS
+    vm_address_t page_start = (vm_address_t)(address & ~(page_size - 1));
+    
+    kern_return_t kr = vm_protect(self, page_start, page_size, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     if (kr == KERN_SUCCESS) {
         memcpy((void *)address, data, size);
-        vm_protect(self, (vm_address_t)address, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+        vm_protect(self, page_start, page_size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     }
 }
 
@@ -63,25 +70,30 @@ uintptr_t findPatternInImage(const char* pattern, const char* mask, size_t len, 
 }
 
 // =================================================================
-// ===============  المصفوفة الكاملة للمكتبات  =====================
+// ===============  المصفوفة المفلترة للسرعة القصوى  ===============
 // =================================================================
 
-static const char* blockedLibraries[] = {
-    "anogs", "tersafe", "libsubstrate.dylib", "substitute-inserter.dylib", "Substitute", "Cephei", "CepheiUI", "Shadow.dylib", "HookKit", "RootBridge", "AppSyncUnified", "libsandy.dylib", "Choicy.dylib", "CrashSight", "CrashSightAdapter", "CrashSightCore", "CrashSightPlugin", "MSDKDns", "PluginCrosCurl", "crosCurl", "PixUI_PXPlugin", "PixVideo", "PixVideoCore", "PxExtObjc", "pixuiCurl", "openplatform", "AdjustSdk", "AdjustSigSdk", "TikTokOpenAuthSDK", "TikTokOpenSDKCore", "flutter_inappwebview", "connectivity_plus", "feed_publish", "App", "meemo_flutter_pip", "photo_manager", "flutter_flog", "meemo_swift_placeholder", "MMKV", "libwebp", "mmkvflutter", "SDWebImage", "url_launcher", "MMKVCore", "package_info_plus", "Flutter", "video_player", "flutter_qapm", "path_provider", "fluttertoast", "share_plus", "MeemoUtils", "Reachability", "calendar_tools", "kk_image_ios", "deviceinfo", "AFNetworking", "image_crop_plus", "AWSCore", "AWSS3", "CoreHaptics", "MetricKit", "UserNotifications", "AuthenticationServices", "libstdc++.6.dylib", "libz.1.dylib", "libc++.1.dylib", "libsqlite3.dylib", "libxml2.2.dylib", "libresolv.9.dylib", "libSystem.B.dylib", "AssetsLibrary", "Combine", "CoreImage", "CoreServices", "LocalAuthentication", "Photos", "SwiftUI", "libobjc.A.dylib", "libswiftAVFoundation.dylib", "libswiftCore.dylib", "libswiftCoreAudio.dylib", "libswiftCoreFoundation.dylib", "libswiftCoreImage.dylib", "libswiftCoreLocation.dylib", "libswiftCoreMIDI.dylib", "libswiftCoreMedia.dylib", "libswiftDarwin.dylib", "libswiftDispatch.dylib", "libswiftMetal.dylib", "libswiftObjectiveC.dylib", "libswiftQuartzCore.dylib", "libswiftos.dylib", "libswiftsimd.dylib", "libswiftCoreGraphics.dylib", "libswiftFoundation.dylib", "libswiftUIKit.dylib", "libGFXShared.dylib", "IOKit", "IOMobileFramebuffer", "IOSurface", "libGLImage.dylib", "IOAccelerator", "libMobileGestalt.dylib", "libicucore.A.dylib", "libc++abi.dylib", "libcache.dylib", "libcommonCrypto.dylib", "libcompiler_rt.dylib", "libcopyfile.dylib", "libcorecrypto.dylib", "libdispatch.dylib", "libdyld.dylib", "liblaunch.dylib", "libmacho.dylib", "libremovefile.dylib", "libsystem_asl.dylib", "libsystem_blocks.dylib", "libsystem_c.dylib", "libsystem_configuration.dylib", "libsystem_containermanager.dylib", "libsystem_coreservices.dylib", "libsystem_darwin.dylib", "libsystem_dnssd.dylib", "libsystem_featureflags.dylib", "libsystem_info.dylib", "libsystem_m.dylib", "libsystem_malloc.dylib", "libsystem_networkextension.dylib", "libsystem_notify.dylib", "libsystem_sandbox.dylib", "libsystem_kernel.dylib", "libsystem_platform.dylib", "libsystem_pthread.dylib", "libsystem_symptoms.dylib", "libsystem_trace.dylib", "libunwind.dylib", "libxpc.dylib", "libenergytrace.dylib", "libbsm.0.dylib", "libCVMSPluginSupport.dylib", "libCoreVMClient.dylib", "libcompression.dylib", "libarchive.2.dylib", "libCRFSuite.dylib", "liblangid.dylib", "liblzma.5.dylib", "libnetwork.dylib", "libapple_nghttp2.dylib", "libpcap.A.dylib", "libcoretls.dylib", "libcoretls_cfhelpers.dylib", "libbz2.1.0.dylib", "libiconv.2.dylib", "libcharset.1.dylib", "AAAInjectionFoundation.dylib"
+// تم تقليل البحث ليركز على أدوات الحماية الحقيقية لمنع كراش المعالج
+static const char* criticalLibraries[] = {
+    "anogs", "tersafe", "libsubstrate", "Substitute", "Shadow.dylib", 
+    "HookKit", "RootBridge", "Choicy", "CrashSight", "MSDKDns", "Cephei"
 };
 
 // =================================================================
-// ===============  الهوكات الأساسية (الشهادة والمكتبات) ===========
+// ===============  الهوكات الفولاذية (لا تسبب أي تعليق) ===========
 // =================================================================
 
 static int (*orig_strcmp)(const char *s1, const char *s2);
 int my_strcmp(const char *s1, const char *s2) {
-    if (isShieldActive && s1 && s2) {
-        char c = s1[0];
-        if (c == 'a' || c == 'l' || c == 'S' || c == 'C') { 
-            size_t count = sizeof(blockedLibraries) / sizeof(blockedLibraries[0]);
-            for (size_t i = 0; i < count; i++) {
-                if (strstr(s1, blockedLibraries[i]) || strstr(s2, blockedLibraries[i])) return 1;
+    if (isShieldActive && s1 && s2 && s1[0] != '\0' && s2[0] != '\0') {
+        // فلتر فائق السرعة: لا يبحث إلا إذا كانت الكلمة أطول من 4 حروف وتبدأ بحروف محددة
+        if (s1[4] != '\0' || s2[4] != '\0') {
+            char c = s1[0];
+            if (c == 'a' || c == 't' || c == 'l' || c == 'S' || c == 'C' || c == 'H' || c == 'M' || c == 'R') { 
+                size_t count = sizeof(criticalLibraries) / sizeof(criticalLibraries[0]);
+                for (size_t i = 0; i < count; i++) {
+                    if (strstr(s1, criticalLibraries[i]) || strstr(s2, criticalLibraries[i])) return 1;
+                }
             }
         }
     }
@@ -100,7 +112,7 @@ int my_getaddrinfo(const char *node, const char *service, const struct addrinfo 
 }
 
 // =================================================================
-// ===============  دوال التنظيف (لزر التنظيف المنفصل)  ============
+// ===============  دوال التنظيف والباتش الذكي  ====================
 // =================================================================
 
 void ExecuteCleaning() {
@@ -121,10 +133,6 @@ void ExecuteCleaning() {
     NSLog(@"[AMAR] Cleaned sensitive files successfully!");
 }
 
-// =================================================================
-// ===============  دوال الباتش (لزر الحماية)  =====================
-// =================================================================
-
 void ExecSmartPatchSafe(uint32_t imageIndex) {
     const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(imageIndex);
     if (!header) return;
@@ -139,10 +147,14 @@ void ExecSmartPatchSafe(uint32_t imageIndex) {
         }
         cmd = (struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
     }
-    if (textSize == 0) return;
+    if (textSize < 4) return;
 
     uint8_t SMART_PATCH[] = {0x00, 0x00, 0x80, 0x52}; 
-    for (uintptr_t curr = baseAddr; curr < baseAddr + textSize - 4; curr += 4) {
+    
+    // محاذاة العناوين لتجنب كراش SIGBUS (أهم خطوة)
+    uintptr_t startAddr = baseAddr + ((4 - (baseAddr % 4)) % 4);
+    
+    for (uintptr_t curr = startAddr; curr < baseAddr + textSize - 4; curr += 4) {
         uint32_t val = *(uint32_t*)curr;
         if (val == 0x52800008 || val == 0x52800009) {
             patch_memory(curr, SMART_PATCH, 4);
@@ -166,7 +178,7 @@ void ActivateAmarOriginalPatterns() {
 }
 
 // =================================================================
-// ===============  أحداث الأزرار (Button Actions)  ================
+// ===============  أحداث الأزرار (في الخلفية بدون تجميد) ==========
 // =================================================================
 
 void ActionTapShield() {
@@ -189,6 +201,7 @@ void ActionTapShield() {
         [shieldBtn.layer addAnimation:shake forKey:@"position"];
     });
 
+    // التنفيذ في المعالج الخلفي لحماية الواجهة من التجميد والكراش
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         ActivateAmarOriginalPatterns();
         uint32_t count = _dyld_image_count();
@@ -204,13 +217,10 @@ void ActionTapShield() {
 
 void ActionTapClean() {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        ExecuteCleaning(); // تنظيف الملفات في الخلفية
-        
+        ExecuteCleaning(); 
         dispatch_async(dispatch_get_main_queue(), ^{
             [cleanBtn setTitle:@"✨ Done" forState:UIControlStateNormal];
             cleanBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.7 blue:0.0 alpha:0.9];
-            
-            // إعادة الزر لشكله الطبيعي بعد ثانيتين
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [cleanBtn setTitle:@"🧹 Clean" forState:UIControlStateNormal];
                 cleanBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.4 blue:0.8 alpha:0.9];
@@ -220,7 +230,7 @@ void ActionTapClean() {
 }
 
 // =================================================================
-// ===============  تصميم واجهة لوحة التحكم المزدوجة  ==============
+// ===============  لوحة التحكم المزدوجة (تأخير 15 ثانية)  =========
 // =================================================================
 
 @interface AmarDualPanelUI : NSObject
@@ -236,11 +246,9 @@ void ActionTapClean() {
         }
         if (!win) return;
         
-        // 1. الحاوية الأساسية القابلة للسحب
         floatingContainer = [[UIView alloc] initWithFrame:CGRectMake(50, 150, 150, 70)];
         floatingContainer.backgroundColor = [UIColor clearColor];
         
-        // 2. زر الحماية (اليسار)
         shieldBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         shieldBtn.frame = CGRectMake(0, 0, 70, 70);
         [shieldBtn setTitle:@"🛡️ OFF" forState:UIControlStateNormal];
@@ -251,9 +259,8 @@ void ActionTapClean() {
         shieldBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
         [shieldBtn addTarget:self action:@selector(tapShield) forControlEvents:UIControlEventTouchUpInside];
         
-        // 3. زر التنظيف (اليمين)
         cleanBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        cleanBtn.frame = CGRectMake(80, 0, 70, 70); // مسافة 10 بكسل بين الزرين
+        cleanBtn.frame = CGRectMake(80, 0, 70, 70);
         [cleanBtn setTitle:@"🧹 Clean" forState:UIControlStateNormal];
         cleanBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.4 blue:0.8 alpha:0.9];
         cleanBtn.layer.cornerRadius = 35;
@@ -265,10 +272,8 @@ void ActionTapClean() {
         [floatingContainer addSubview:shieldBtn];
         [floatingContainer addSubview:cleanBtn];
         
-        // تفعيل السحب على الحاوية بالكامل
         UIPanGestureRecognizer *p = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
         [floatingContainer addGestureRecognizer:p];
-        
         [win addSubview:floatingContainer];
     });
 }
