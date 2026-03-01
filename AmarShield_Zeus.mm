@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>      // <==== هذا هو المنقذ الذي سيحل الخطأ!
 #include <errno.h>
 #include <stdarg.h>
 #include <sys/types.h>
@@ -14,6 +15,7 @@
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
+
 
 // =================================================================
 // ======== بيئة الخداع الشامل (Non-Jailbreak Mirage Environment) ==
