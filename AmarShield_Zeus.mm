@@ -14,7 +14,8 @@
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
-#include <sys/ptrace.h>
+// تم حذف ptrace.h بنجاح!
+
 
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
