@@ -12,19 +12,20 @@ jobs:
 
     env:
       THEOS: ${{ github.workspace }}/theos
-      # السطران السحريان لمنع حظر GitHub API وتسريع البناء
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       HOMEBREW_NO_AUTO_UPDATE: 1
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        # تم التحديث إلى v4
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Cache Theos
         id: cache-theos
-        uses: actions/cache@v3
+        # تم التحديث إلى v4
+        uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
           key: ${{ runner.os }}-theos-master
@@ -42,7 +43,8 @@ jobs:
           make package FINALPACKAGE=1
         
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        # تم التحديث إلى v4
+        uses: actions/upload-artifact@v4
         with:
           name: AmarShield-Dylib
-          path: .theos/obj/debug/*.dylib # سيقوم بسحب ملف dylib الجاهز مباشرة
+          path: .theos/obj/debug/*.dylib
