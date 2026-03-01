@@ -17,14 +17,12 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        # تم التحديث إلى v4
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Cache Theos
         id: cache-theos
-        # تم التحديث إلى v4
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
@@ -37,14 +35,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # الخطوة السحرية الجديدة: تحميل أداة التوقيع ldid
+      - name: Install ldid
+        run: brew install ldid
+
       - name: Build Dylib
         run: |
           make clean
           make package FINALPACKAGE=1
         
       - name: Upload Artifact
-        # تم التحديث إلى v4
         uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-Dylib
-          path: .theos/obj/debug/*.dylib
+          name: AmarShield-Ready
+          path: |
+            .theos/obj/**/*.dylib
+            packages/*.deb
