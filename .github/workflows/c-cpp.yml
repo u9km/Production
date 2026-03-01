@@ -20,7 +20,7 @@ jobs:
 
       - name: "Build Tweak with Theos"
         run: |
-          # أمر البناء البسيط بفضل الـ Makefile
+          # أمر البنا البسيط بفضل الـ Makefile
           make package FINALPACKAGE=1
         env:
           THEOS: ~/theos
