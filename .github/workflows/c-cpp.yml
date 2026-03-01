@@ -1,33 +1,48 @@
-name: "Amar Zeus Theos Build"
+name: Production Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build AmarShield
     runs-on: macos-latest
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      # السطران السحريان لمنع حظر GitHub API وتسريع البناء
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HOMEBREW_NO_AUTO_UPDATE: 1
+
     steps:
-      - name: "Checkout Code"
-        uses: actions/checkout@v4
-
-      - name: "Setup Theos Environment"
-        run: |
-          # تحميل وتثبيت Theos الرسمية على خادم البناء
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-          echo "THEOS=~/theos" >> $GITHUB_ENV
-
-      - name: "Build Tweak with Theos"
-        run: |
-          # أمر البنا البسيط بفضل الـ Makefile
-          make package FINALPACKAGE=1
-        env:
-          THEOS: ~/theos
-
-      - name: "Upload Dylib"
-        uses: actions/upload-artifact@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v3
         with:
-          name: AmarShield-Theos-Dylib
-          # Theos يضع الـ dylib الجاهز في هذا المسار المخفي
-          path: .theos/obj/**/*.dylib
+          submodules: recursive
+
+      - name: Cache Theos
+        id: cache-theos
+        uses: actions/cache@v3
+        with:
+          path: ${{ github.workspace }}/theos
+          key: ${{ runner.os }}-theos-master
+
+      - name: Setup Theos
+        if: steps.cache-theos.outputs.cache-hit != 'true'
+        run: |
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Dylib
+        run: |
+          make clean
+          make package FINALPACKAGE=1
+        
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: AmarShield-Dylib
+          path: .theos/obj/debug/*.dylib # سيقوم بسحب ملف dylib الجاهز مباشرة
