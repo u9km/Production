@@ -16,10 +16,6 @@
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
 
-// =================================================================
-// ======== بيئة درع منتظر المطلق (Ultimate Full-Hack Support) =====
-// =================================================================
-
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
@@ -29,14 +25,14 @@ extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_n
 #define CS_DEBUGGED 0x10000000       
 
 // =================================================================
-// ======== 1. فلتر المسارات (السراب المطلق) =======================
+// ======== 1. الفلتر المصحح (السماح بتسجيل الدخول) ================
 // =================================================================
 
 inline bool isDangerousPath(const char *path) {
     if (!path) return false;
+    // تم إزالة MMKV و RoleInfo.ini لكي لا يحدث كراش في تسجيل الدخول
     return (strstr(path, "/Logs") || strstr(path, "Saved/Logs") ||
-            strstr(path, "RoleInfo.ini") || strstr(path, "Saved/Pandora") ||
-            strstr(path, "Saved/CrashSight") || strstr(path, "MMKV") ||
+            strstr(path, "Saved/Pandora") || strstr(path, "Saved/CrashSight") ||
             strstr(path, "tombstone") || strstr(path, "embedded.mobileprovision") ||
             strstr(path, "MobileSubstrate") || strstr(path, "Cydia"));
 }
@@ -69,7 +65,6 @@ int my_connect(int socket, const struct sockaddr *address, socklen_t address_len
         struct sockaddr_in *ipv4 = (struct sockaddr_in *)address;
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(ipv4->sin_addr), ip, INET_ADDRSTRLEN);
-        // حظر بورتات التبليغ وتقارير التفعيلات العنيفة
         if (ntohs(ipv4->sin_port) == 8081 || strstr(ip, "119.29.") || strstr(ip, "101.32.")) {
             errno = ETIMEDOUT; return -1;
         }
@@ -81,17 +76,12 @@ int my_connect(int socket, const struct sockaddr *address, socklen_t address_len
 // ======== 3. حماية "التفعيلات الفل" (Memory & Anti-Dump) ========
 // =================================================================
 
-// 1. عمى الذاكرة: منع الحماية من استخراج تفاصيل الذاكرة وقراءة التعديلات (ESP/Aimbot)
 static kern_return_t (*orig_task_info)(task_name_t target_task, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t *task_info_outCnt);
 kern_return_t my_task_info(task_name_t target_task, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t *task_info_outCnt) {
-    // إذا حاولت الحماية جلب معلومات الذاكرة للبحث عن دوال معدلة
-    if (flavor == TASK_DYLD_INFO) {
-        return KERN_FAILURE; // اللعبة ستعتقد أن النظام يرفض إعطائها الصلاحية ولن تعطي باند
-    }
+    if (flavor == TASK_DYLD_INFO) return KERN_FAILURE;
     return orig_task_info(target_task, flavor, task_info_out, task_info_outCnt);
 }
 
-// 2. إخفاء ملف الهاك (تفعيلاتك) من مسح النواة
 static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
 const char* my_dyld_get_image_name(uint32_t image_index) {
     const char* name = orig_dyld_get_image_name(image_index);
@@ -101,22 +91,17 @@ const char* my_dyld_get_image_name(uint32_t image_index) {
     return name;
 }
 
-// 3. مسح علامة التتبع والأعلام الخبيثة من النظام
 static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
     if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
         if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
             struct kinfo_proc *info = (struct kinfo_proc *)oldp;
-            info->kp_proc.p_flag &= ~P_TRACED; // مسح آثار الحقن
+            info->kp_proc.p_flag &= ~P_TRACED;
         }
     }
     return ret;
 }
-
-// =================================================================
-// ======== 4. محرك الهندسة العكسية المضاد (RE Engine) =============
-// =================================================================
 
 static void* (*orig_dlsym)(void *handle, const char *symbol);
 void* my_dlsym(void *handle, const char *symbol) {
@@ -127,9 +112,8 @@ void* my_dlsym(void *handle, const char *symbol) {
         if (strcmp(symbol, "task_info") == 0) return (void*)my_task_info;
         if (strcmp(symbol, "sysctl") == 0) return (void*)my_sysctl;
         
-        // منع الحماية من استدعاء دوال فحص الذاكرة الخطيرة مباشرة
         if (strcmp(symbol, "vm_read") == 0 || strcmp(symbol, "vm_region") == 0) {
-            return NULL; // إفشال طلب الحماية بصمت لكي لا ترى التفعيلات الفل
+            return NULL; 
         }
     }
     return orig_dlsym(handle, symbol);
@@ -145,10 +129,6 @@ int my_csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize) {
     return ret;
 }
 
-// =================================================================
-// ======== 5. تجاوز المتجر (Obj-C Passthrough) ====================
-// =================================================================
-
 static IMP orig_appStoreReceiptURL;
 NSURL* my_appStoreReceiptURL(id self, SEL _cmd) {
     NSString *fakeReceipt = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"_MASReceipt/receipt"];
@@ -162,11 +142,10 @@ BOOL my_fileExistsAtPath(id self, SEL _cmd, NSString *path) {
 }
 
 // =================================================================
-// ======== محرك الإقلاع السيادي المطلق (Zero-Delay) ===============
+// ======== الإقلاع الآمن ==========================================
 // =================================================================
 
 void IgniteMontazerCore() {
-    // 10 هوكات دفاعية متقدمة تغطي كل الثغرات الممكنة
     struct rebinding r[] = { 
         {"open", (void*)my_open, (void**)&orig_open},
         {"stat", (void*)my_stat, (void**)&orig_stat},
@@ -186,6 +165,33 @@ void IgniteMontazerCore() {
     Method fileMethod = class_getInstanceMethod([NSFileManager class], @selector(fileExistsAtPath:));
     orig_fileExistsAtPath = method_getImplementation(fileMethod);
     method_setImplementation(fileMethod, (IMP)my_fileExistsAtPath);
+
+    // إشعار التحقق الآمن (تم إصلاح الكراش المحتمل هنا أيضاً بتأكد من وجود الـ window)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *win = nil;
+        for (UIWindowScene* s in [UIApplication sharedApplication].connectedScenes) {
+            if (s.activationState == UISceneActivationStateForegroundActive) { win = s.windows.firstObject; break; }
+        }
+        if (!win) return;
+        
+        UILabel *toast = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 260, 45)];
+        toast.center = CGPointMake(win.center.x, 60);
+        toast.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
+        toast.textColor = [UIColor colorWithRed:0.0 green:0.8 blue:0.4 alpha:1.0]; 
+        toast.textAlignment = NSTextAlignmentCenter;
+        toast.font = [UIFont boldSystemFontOfSize:15];
+        toast.text = @"✅ V6.1 Shield (Login Fixed)";
+        toast.layer.cornerRadius = 22.5;
+        toast.clipsToBounds = YES;
+        toast.layer.borderWidth = 1.5;
+        toast.layer.borderColor = [UIColor greenColor].CGColor;
+        toast.alpha = 0.0;
+        
+        [win addSubview:toast];
+        [UIView animateWithDuration:0.5 animations:^{ toast.alpha = 1.0; } completion:^(BOOL finished) {
+            [UIView animateWithDuration:0.5 delay:3.0 options:UIViewAnimationOptionCurveEaseOut animations:^{ toast.alpha = 0.0; } completion:^(BOOL finished) { [toast removeFromSuperview]; }];
+        }];
+    });
 }
 
 __attribute__((constructor)) static void inject_montazer_core() { 
