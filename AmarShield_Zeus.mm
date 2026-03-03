@@ -7,47 +7,106 @@
 #include <dlfcn.h>
 #include <vector>
 #include <math.h>
+#include <stdarg.h>
 
-// --- تعريف هيكل الربط (Fishhook) ---
+// =================================================================
+// [الأساسيات] تعريف هيكل الربط (Fishhook)
+// =================================================================
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
-// هيكل الأنماط (Pattern Scanning)
+// هيكل الأنماط لمحرك البحث
 struct Pattern {
     std::vector<uint8_t> data;
     int skip;
 };
 
 // =================================================================
-// 1. محرك الترقيع الجراحي (NOP Patcher - Offline Ban Bypass)
+// 1. طبقة الإخفاء المرئي (Stream-Proof Visual Ghosting)
 // =================================================================
+@interface BlackSovereignShield : NSObject
++ (UIView *)createInvisibleCanvas:(CGRect)frame;
+@end
 
-class BlackAbsolutePatcher {
+@implementation BlackSovereignShield
++ (UIView *)createInvisibleCanvas:(CGRect)frame {
+    UITextField *secureField = [[UITextField alloc] initWithFrame:frame];
+    secureField.secureTextEntry = YES; // يمنع تصوير الشاشة (لـ ESP)
+    secureField.userInteractionEnabled = NO;
+    UIView *canvas = secureField.subviews.firstObject;
+    canvas.frame = frame;
+    canvas.backgroundColor = [UIColor clearColor];
+    return canvas;
+}
+@end
+
+// =================================================================
+// 2. نظام النجاة السلوكي (Behavioral Survival Engine)
+// =================================================================
+struct Vector2 { float x, y; };
+
+Vector2 ApplyHumanizedAim(Vector2 current, Vector2 target, float baseSmooth) {
+    Vector2 result;
+    float dx = target.x - current.x;
+    float dy = target.y - current.y;
+    
+    // إضافة تلطيخ بشري عشوائي (Jitter) لكسر الكشف الرياضي
+    float jitter = ((float)arc4random_uniform(100) / 1000.0f) - 0.05f;
+    dx += jitter; dy += jitter;
+
+    // النعومة الديناميكية: تباطؤ عند الاقتراب يحاكي التركيز البشري
+    float dist = sqrtf(dx*dx + dy*dy);
+    float dynamicSmooth = (dist < 5.0f) ? baseSmooth * 1.8f : baseSmooth;
+    
+    result.x = current.x + (dx / dynamicSmooth);
+    result.y = current.y + (dy / dynamicSmooth);
+    return result;
+}
+
+// =================================================================
+// 3. محرك الترقيع الجراحي (Targeted NOP Patcher - anogs)
+// =================================================================
+class BlackPatcherEngine {
 public:
     static const uint32_t ARM64_NOP = 0xD503201F;
 
-    // تم تصحيح اسم الدالة هنا ليتطابق مع الاستدعاء في الأسفل
-    static void ApplySafeBypass() {
-        // الأنماط التي استخرجتها لإلغاء الباند الغيابي
+    static void ExecuteSafeBypass() {
         std::vector<Pattern> targets = {
-            {{0x08, 0x00, 0x80, 0x52}, 100}, 
-            {{0x09, 0x00, 0x80, 0x52}, 100}
+            {{0x08, 0x00, 0x80, 0x52}, 100}, // MOV W8, #0
+            {{0x09, 0x00, 0x80, 0x52}, 100}  // MOV W9, #0
         };
 
-        uintptr_t baseAddr = (uintptr_t)_dyld_get_image_header(0);
-        size_t searchRange = 0x8000000; 
+        uintptr_t anogsBase = 0;
+        size_t searchRange = 0x5000000; 
 
+        // عزل البحث داخل مديول anogs فقط لمنع الكراش
+        uint32_t imageCount = _dyld_image_count();
+        for (uint32_t i = 0; i < imageCount; i++) {
+            const char *imageName = _dyld_get_image_name(i);
+            if (imageName && strstr(imageName, "anogs")) {
+                anogsBase = (uintptr_t)_dyld_get_image_header(i);
+                NSLog(@"✅ [Black] Anogs Module Locked at: %p", (void*)anogsBase);
+                break;
+            }
+        }
+
+        if (anogsBase == 0) {
+            NSLog(@"⚠️ [Black] Anogs not loaded yet. Patcher standing by.");
+            return; 
+        }
+
+        // تطبيق الـ NOP ببروتوكول أمان الذاكرة
         for (const auto& target : targets) {
-            for (uintptr_t i = baseAddr; i < baseAddr + searchRange; i++) {
+            for (uintptr_t i = anogsBase; i < anogsBase + searchRange; i++) {
                 if (memcmp((void *)i, target.data.data(), target.data.size()) == 0) {
                     uintptr_t patchAddr = i + target.skip;
                     
-                    // بروتوكول الأمان: فتح الذاكرة، وضع NOP، ثم القفل
-                    vm_protect(mach_task_self(), (vm_address_t)patchAddr, 4, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-                    *(uint32_t *)patchAddr = ARM64_NOP;
-                    vm_protect(mach_task_self(), (vm_address_t)patchAddr, 4, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
-                    
-                    NSLog(@"✅ [Balck] Pattern Patched with NOP at: %p", (void*)patchAddr);
+                    kern_return_t kr = vm_protect(mach_task_self(), (vm_address_t)patchAddr, 4, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                    if (kr == KERN_SUCCESS) {
+                        *(uint32_t *)patchAddr = ARM64_NOP;
+                        vm_protect(mach_task_self(), (vm_address_t)patchAddr, 4, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+                        NSLog(@"✅ [Black] Offline Ban Pattern Neutralized (NOP) at offset: 0x%lx", (long)(i - anogsBase));
+                    }
                     break; 
                 }
             }
@@ -56,81 +115,25 @@ public:
 };
 
 // =================================================================
-// 2. نظام النجاة السلوكي (Black Survival Aim)
+// 4. هوكات الحماية الشبحية وتزييف الهوية (Stealth & Identity Hooks)
 // =================================================================
 
-struct Vector2 { float x, y; };
-
-Vector2 CalculateSurvivalAim(Vector2 current, Vector2 target, float smooth) {
-    Vector2 result;
-    float dx = target.x - current.x;
-    float dy = target.y - current.y;
-    
-    // إضافة "تلطيخ بشري" (Jitter) لمنع كشف الذكاء الاصطناعي للسيرفر
-    float jitter = ((float)arc4random_uniform(100) / 1000.0f) - 0.05f;
-    dx += jitter; dy += jitter;
-
-    // النعومة الديناميكية: تباطؤ عند الاقتراب من الخصم
-    float dist = sqrtf(dx*dx + dy*dy);
-    float finalSmooth = (dist < 4.0f) ? smooth * 1.7f : smooth;
-    
-    result.x = current.x + (dx / finalSmooth);
-    result.y = current.y + (dy / finalSmooth);
-    return result;
-}
-
-// =================================================================
-// 3. تخدير الـ SDK وحماية الهوية (SDK & Cert Mirage)
-// =================================================================
-
-// تزييف تقارير AnoSDK (الباند الغيابي والشبكة)
+// [أ] استئصال الـ SDK (AnoSDK Lobotomy)
 void* my_AnoSDKGetReportData(int* out_size) {
     if (out_size) *out_size = 0;
     return NULL; 
 }
-
 int my_AnoSDKInit(void* a1, void* a2, void* a3) { return 1; }
+void my_AnoSDKOnRecvData(void* d, int s) { return; }
+void my_AnoSDKSetUserInfo(void* i) { return; }
 
-// إخفاء بصمة الجهاز وشهادة الريكوفري (Identity Protection)
+// [ب] إخفاء الشهادة (Recovery/DNS Identity Spoofing)
 static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
 OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
     return errSecItemNotFound; 
 }
 
-// حماية الذاكرة من الفحص (Anti-Memory Scan)
-static kern_return_t (*orig_vm_read)(vm_map_t, vm_address_t, vm_size_t, vm_offset_t*, mach_msg_type_number_t*);
-kern_return_t my_vm_read(vm_map_t t, vm_address_t a, vm_size_t s, vm_offset_t* d, mach_msg_type_number_t* dc) {
-    return KERN_FAILURE; 
-}
-
-// تزييف حالة النظام وإخفاء الحقن (Anti-Debugger)
-static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-    if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
-        if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
-            struct kinfo_proc *info = (struct kinfo_proc *)oldp;
-            info->kp_proc.p_flag &= ~P_TRACED; // مسح علامة التتبع (Debugger Flag)
-        }
-    }
-    return ret;
-}
-
-// =================================================================
-// 4. فلتر الشبكة والملفات (Investigator Shield)
-// =================================================================
-
-// منع إرسال لقطات الشاشة والبلاغات
-static ssize_t (*orig_sendto)(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al);
-ssize_t my_sendto(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al) {
-    if (b && l > 0) {
-        const char *payload = (const char *)b;
-        if (strstr(payload, "pic_data") || strstr(payload, "Report")) return l;
-    }
-    return orig_sendto(s, b, l, f, d, al);
-}
-
-// توجيه سجلات الباند الغيابي للعدم
+// [ج] فلتر الملفات (توجيه السجلات وملف الـ Provision للعدم)
 static int (*orig_open)(const char *path, int oflag, ...);
 int my_open(const char *path, int oflag, ...) {
     if (path && (strstr(path, "CrashSight") || strstr(path, "Saved/Logs") || strstr(path, "embedded.mobileprovision"))) {
@@ -142,23 +145,54 @@ int my_open(const char *path, int oflag, ...) {
     return orig_open(path, oflag, mode);
 }
 
-// =================================================================
-// 5. محرك الربط الرئيسي (The Grand Entry)
-// =================================================================
+// [د] درع المحققين والشبكة (اعتراض الصور والبلاغات)
+static ssize_t (*orig_sendto)(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al);
+ssize_t my_sendto(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al) {
+    if (b && l > 0) {
+        const char *payload = (const char *)b;
+        if (strstr(payload, "pic_data") || strstr(payload, "Report") || strstr(payload, "screenshot")) return l; 
+    }
+    return orig_sendto(s, b, l, f, d, al);
+}
 
+// [هـ] حماية الذاكرة من الفحص (Anti-Memory Scan)
+static kern_return_t (*orig_vm_read)(vm_map_t, vm_address_t, vm_size_t, vm_offset_t*, mach_msg_type_number_t*);
+kern_return_t my_vm_read(vm_map_t t, vm_address_t a, vm_size_t s, vm_offset_t* d, mach_msg_type_number_t* dc) {
+    return KERN_FAILURE; 
+}
+
+// [و] تزييف نبض النظام (Anti-Debugger P_TRACED)
+static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+    if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
+        if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
+            struct kinfo_proc *info = (struct kinfo_proc *)oldp;
+            info->kp_proc.p_flag &= ~P_TRACED; 
+        }
+    }
+    return ret;
+}
+
+// =================================================================
+// 5. بوابة التوجيه الديناميكية (Dynamic Lookup Master Hook)
+// =================================================================
 static void* (*orig_dlsym)(void *h, const char *s);
 void* my_dlsym(void *h, const char *s) {
     if (s) {
-        if (strcmp(s, "AnoSDKGetReportData") == 0) return (void*)my_AnoSDKGetReportData;
         if (strcmp(s, "AnoSDKInit") == 0) return (void*)my_AnoSDKInit;
-        if (strcmp(s, "vm_read") == 0) return (void*)my_vm_read;
+        if (strcmp(s, "AnoSDKGetReportData") == 0) return (void*)my_AnoSDKGetReportData;
         if (strcmp(s, "SecItemCopyMatching") == 0) return (void*)my_SecItemCopyMatching;
+        if (strcmp(s, "vm_read") == 0) return (void*)my_vm_read;
         if (strcmp(s, "sysctl") == 0) return (void*)my_sysctl;
     }
     return orig_dlsym(h, s);
 }
 
-void IgniteBlackUltimateSovereign() {
+// =================================================================
+// محرك الإقلاع السيادي (The Grand Entry Point)
+// =================================================================
+void IgniteBlackOmegaSystem() {
     struct rebinding r[] = { 
         {"dlsym", (void*)my_dlsym, (void**)&orig_dlsym},
         {"open", (void*)my_open, (void**)&orig_open},
@@ -169,12 +203,12 @@ void IgniteBlackUltimateSovereign() {
     };
     rebind_symbols(r, 6);
 
-    // تشغيل ترقيع الذاكرة بالـ NOP
-    BlackAbsolutePatcher::ApplySafeBypass();
+    // تشغيل الترقيع الجراحي لملف anogs (الباند الغيابي)
+    BlackPatcherEngine::ExecuteSafeBypass();
 
-    NSLog(@"💎 [Balck] Sovereign Ultimate System Online. Full Options Engaged.");
+    NSLog(@"💎 [Black Sovereign V-Omega] System Online. Full Options Engaged. Shield Wall Active.");
 }
 
-__attribute__((constructor)) static void main_entry() {
-    IgniteBlackUltimateSovereign();
+__attribute__((constructor)) static void main_omega_entry() {
+    IgniteBlackOmegaSystem();
 }
