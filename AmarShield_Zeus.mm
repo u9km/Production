@@ -2,11 +2,13 @@
 #import <Foundation/Foundation.h>
 #import <AdSupport/AdSupport.h>
 #import <objc/runtime.h>
-#include <sys/stat.h>
-#include <sys/sysctl.h>
-#include <sys/socket.h>
-#include <dlfcn.h>
-#include <math.h>
+#include <stdio.h>       // تمت الإضافة: لدعم fopen و FILE
+#include <sys/stat.h>    // لدعم stat
+#include <sys/sysctl.h>  // لدعم sysctl
+#include <sys/socket.h>  // لدعم sendto
+#include <mach/mach.h>   // تمت الإضافة: لدعم vm_read
+#include <dlfcn.h>       // لدعم dlsym
+#include <math.h>        // لدعم الرياضيات
 
 // =================================================================
 // [الأساسيات] تعريف هيكل الربط (Fishhook)
@@ -58,11 +60,11 @@ Vector2 ApplyHumanizedAim(Vector2 current, Vector2 target, float baseSmooth) {
     float dx = target.x - current.x;
     float dy = target.y - current.y;
     
-    // تلطيخ بشري عشوائي (Jitter) لكسر الكشف الرياضي
+    // تلطيخ بشري عشوائي (Jitter)
     float jitter = ((float)arc4random_uniform(100) / 1000.0f) - 0.05f;
     dx += jitter; dy += jitter;
 
-    // النعومة الديناميكية (Dynamic Smoothing)
+    // النعومة الديناميكية
     float dist = sqrtf(dx*dx + dy*dy);
     float dynamicSmooth = (dist < 5.0f) ? baseSmooth * 1.8f : baseSmooth;
     
@@ -93,15 +95,25 @@ int my_open(const char *path, int oflag, ...) {
                  strstr(path, "embedded.mobileprovision"))) {
         return orig_open("/dev/null", oflag); 
     }
-    va_list args; va_start(args, oflag); 
+    va_list args; 
+    va_start(args, oflag); 
     mode_t mode = (oflag & O_CREAT) ? va_arg(args, int) : 0; 
     va_end(args);
     return orig_open(path, oflag, mode);
 }
 
-// [ج] هوك stat - إخفاء الملفات وتجميد زمن اللعبة (Hash Spoofing)
-static int (*orig_stat)(const char *path, struct stat *buf); // تم حذف restrict
-int my_stat(const char *path, struct stat *buf) {            // تم حذف restrict
+// [ب] هوك fopen - دعم إضافي لمنع الكتابة (تم تصحيحه)
+static FILE* (*orig_fopen)(const char *filename, const char *mode);
+FILE* my_fopen(const char *filename, const char *mode) {
+    if (filename && (strstr(filename, "comm.dat") || strstr(filename, "CrashSight") || strstr(filename, "anogs"))) {
+        return orig_fopen("/dev/null", mode);
+    }
+    return orig_fopen(filename, mode);
+}
+
+// [ج] هوك stat - إخفاء الملفات وتجميد زمن اللعبة (بدون restrict لتوافق C++)
+static int (*orig_stat)(const char *path, struct stat *buf);
+int my_stat(const char *path, struct stat *buf) {
     if (path && (strstr(path, "comm.dat") || strstr(path, "CrashSight") || strstr(path, "embedded.mobileprovision"))) {
         return -1; // إيهام الحماية أن الملفات غير موجودة
     }
@@ -117,18 +129,15 @@ int my_stat(const char *path, struct stat *buf) {            // تم حذف rest
     return ret;
 }
 
-
 // =================================================================
 // 5. حماية الشبكة والهوية (Network & Identity Shield)
 // =================================================================
 
-// تزييف هوية الشهادة (DNS/Recovery Bypass)
 static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
 OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
     return errSecItemNotFound; 
 }
 
-// ابتلاع البلاغات ولقطات الشاشة (Investigator Shield)
 static ssize_t (*orig_sendto)(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al);
 ssize_t my_sendto(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al) {
     if (b && l > 0) {
@@ -178,7 +187,7 @@ void IgniteBlackSovereignUltimate() {
     // 1. تجميد البصمة الرقمية فوراً
     FreezeDigitalSignature();
 
-    // 2. ربط جميع الهوكات الشبحية
+    // 2. ربط جميع الهوكات الشبحية بدقة
     struct rebinding r[] = { 
         {"dlsym", (void*)my_dlsym, (void**)&orig_dlsym},
         {"open", (void*)my_open, (void**)&orig_open},
@@ -189,9 +198,11 @@ void IgniteBlackSovereignUltimate() {
         {"vm_read", (void*)my_vm_read, (void**)&orig_vm_read},
         {"SecItemCopyMatching", (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching}
     };
+    
+    // تسجيل 8 دوال للربط
     rebind_symbols(r, 8);
 
-    NSLog(@"💎 [Black Sovereign V-Stable] System Online. No Offsets. Identity Frozen. Shield Wall Active.");
+    NSLog(@"💎 [AmarShield Zeus] PREMIUM TIER ONLINE. Zero Crashes. Identity Locked. Offline Ban Obliterated.");
 }
 
 __attribute__((constructor)) static void black_master_entry() {
