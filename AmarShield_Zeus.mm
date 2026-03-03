@@ -26,8 +26,9 @@ class BlackAbsolutePatcher {
 public:
     static const uint32_t ARM64_NOP = 0xD503201F;
 
-    static void ApplySurvivalPatches() {
-        // الأنماط التي استخرجتها يا Black لإلغاء الباند الغيابي
+    // تم تصحيح اسم الدالة هنا ليتطابق مع الاستدعاء في الأسفل
+    static void ApplySafeBypass() {
+        // الأنماط التي استخرجتها لإلغاء الباند الغيابي
         std::vector<Pattern> targets = {
             {{0x08, 0x00, 0x80, 0x52}, 100}, 
             {{0x09, 0x00, 0x80, 0x52}, 100}
@@ -102,6 +103,19 @@ kern_return_t my_vm_read(vm_map_t t, vm_address_t a, vm_size_t s, vm_offset_t* d
     return KERN_FAILURE; 
 }
 
+// تزييف حالة النظام وإخفاء الحقن (Anti-Debugger)
+static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+    if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
+        if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
+            struct kinfo_proc *info = (struct kinfo_proc *)oldp;
+            info->kp_proc.p_flag &= ~P_TRACED; // مسح علامة التتبع (Debugger Flag)
+        }
+    }
+    return ret;
+}
+
 // =================================================================
 // 4. فلتر الشبكة والملفات (Investigator Shield)
 // =================================================================
@@ -119,10 +133,12 @@ ssize_t my_sendto(int s, const void *b, size_t l, int f, const struct sockaddr *
 // توجيه سجلات الباند الغيابي للعدم
 static int (*orig_open)(const char *path, int oflag, ...);
 int my_open(const char *path, int oflag, ...) {
-    if (path && (strstr(path, "CrashSight") || strstr(path, "Saved/Logs"))) {
+    if (path && (strstr(path, "CrashSight") || strstr(path, "Saved/Logs") || strstr(path, "embedded.mobileprovision"))) {
         return orig_open("/dev/null", oflag);
     }
-    va_list args; va_start(args, oflag); mode_t mode = va_arg(args, int); va_end(args);
+    va_list args; va_start(args, oflag); 
+    mode_t mode = (oflag & O_CREAT) ? va_arg(args, int) : 0; 
+    va_end(args);
     return orig_open(path, oflag, mode);
 }
 
@@ -134,8 +150,10 @@ static void* (*orig_dlsym)(void *h, const char *s);
 void* my_dlsym(void *h, const char *s) {
     if (s) {
         if (strcmp(s, "AnoSDKGetReportData") == 0) return (void*)my_AnoSDKGetReportData;
+        if (strcmp(s, "AnoSDKInit") == 0) return (void*)my_AnoSDKInit;
         if (strcmp(s, "vm_read") == 0) return (void*)my_vm_read;
         if (strcmp(s, "SecItemCopyMatching") == 0) return (void*)my_SecItemCopyMatching;
+        if (strcmp(s, "sysctl") == 0) return (void*)my_sysctl;
     }
     return orig_dlsym(h, s);
 }
@@ -145,9 +163,11 @@ void IgniteBlackUltimateSovereign() {
         {"dlsym", (void*)my_dlsym, (void**)&orig_dlsym},
         {"open", (void*)my_open, (void**)&orig_open},
         {"sendto", (void*)my_sendto, (void**)&orig_sendto},
+        {"sysctl", (void*)my_sysctl, (void**)&orig_sysctl},
+        {"vm_read", (void*)my_vm_read, (void**)&orig_vm_read},
         {"SecItemCopyMatching", (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching}
     };
-    rebind_symbols(r, 4);
+    rebind_symbols(r, 6);
 
     // تشغيل ترقيع الذاكرة بالـ NOP
     BlackAbsolutePatcher::ApplySafeBypass();
