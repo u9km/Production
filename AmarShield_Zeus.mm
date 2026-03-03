@@ -99,18 +99,9 @@ int my_open(const char *path, int oflag, ...) {
     return orig_open(path, oflag, mode);
 }
 
-// [ب] هوك fopen - دعم إضافي لمنع الكتابة
-static FILE* (*orig_fopen)(const char *filename, const char *mode);
-FILE* my_fopen(const char *filename, const char *mode) {
-    if (filename && (strstr(filename, "comm.dat") || strstr(filename, "CrashSight") || strstr(filename, "anogs"))) {
-        return orig_fopen("/dev/null", mode);
-    }
-    return orig_fopen(filename, mode);
-}
-
 // [ج] هوك stat - إخفاء الملفات وتجميد زمن اللعبة (Hash Spoofing)
-static int (*orig_stat)(const char *restrict path, struct stat *restrict buf);
-int my_stat(const char *restrict path, struct stat *restrict buf) {
+static int (*orig_stat)(const char *path, struct stat *buf); // تم حذف restrict
+int my_stat(const char *path, struct stat *buf) {            // تم حذف restrict
     if (path && (strstr(path, "comm.dat") || strstr(path, "CrashSight") || strstr(path, "embedded.mobileprovision"))) {
         return -1; // إيهام الحماية أن الملفات غير موجودة
     }
@@ -125,6 +116,7 @@ int my_stat(const char *restrict path, struct stat *restrict buf) {
     }
     return ret;
 }
+
 
 // =================================================================
 // 5. حماية الشبكة والهوية (Network & Identity Shield)
