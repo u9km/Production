@@ -2,7 +2,7 @@
  * Project: AmarShield Zeus - LEGENDARY SOVEREIGN TIER
  * Architect: Montazer Ali (March 2026)
  * Core: Polymorphic Stealth + Memory Arsenal (Payload) + AnoSDK Lobotomy
- * Status: Fixed and Ready for Theos/Xcode Compilation.
+ * Status: Fixed for C++11 (Theos/GitHub Actions Compatibility).
  */
 
 #import <Foundation/Foundation.h>
@@ -20,13 +20,24 @@
 #include <mach/vm_map.h>
 #include <dlfcn.h>
 #include <sys/mman.h>
-#include <utility> // من أجل std::index_sequence
-#include <libkern/OSCacheControl.h> // من أجل sys_icache_invalidate
+#include <libkern/OSCacheControl.h> 
 
 // =================================================================
-// [1] محرك التشفير المتغير وقت الترجمة (Polymorphic Stealth)
+// [1] محرك التشفير المتغير وقت الترجمة (C++11 Polymorphic Stealth)
 // =================================================================
 #define RANDOM_SEED (__TIME__[7] - '0') * 1ULL + (__TIME__[6] - '0') * 10ULL
+
+// بناء Index Sequence خاص بنا ليتوافق مع المترجمات القديمة (C++11)
+namespace SovereignMeta {
+    template <size_t... Is>
+    struct index_sequence {};
+
+    template <size_t N, size_t... Is>
+    struct make_index_sequence : make_index_sequence<N - 1, N - 1, Is...> {};
+
+    template <size_t... Is>
+    struct make_index_sequence<0, Is...> : index_sequence<Is...> {};
+}
 
 template <size_t N, char Key>
 class SecureString {
@@ -34,13 +45,12 @@ private:
     std::array<char, N> _data;
     constexpr char enc(char c, size_t i) const { return c ^ (Key + i); }
 
-    // مشيد مساعد يستخدم index_sequence لتجنب حلقة for المرفوضة في constexpr
+    // استخدام الـ Sequence الخاص بنا بدلاً من std
     template <size_t... Is>
-    constexpr SecureString(const char(&s)[N], std::index_sequence<Is...>) : _data{ enc(s[Is], Is)... } {}
+    constexpr SecureString(const char(&s)[N], SovereignMeta::index_sequence<Is...>) : _data{ enc(s[Is], Is)... } {}
 
 public:
-    // المشيد الأساسي
-    constexpr SecureString(const char(&s)[N]) : SecureString(s, std::make_index_sequence<N>{}) {}
+    constexpr SecureString(const char(&s)[N]) : SecureString(s, SovereignMeta::make_index_sequence<N>{}) {}
 
     std::string reveal() const {
         std::string d; d.reserve(N);
@@ -56,27 +66,20 @@ public:
 // =================================================================
 namespace SovereignArsenal {
     
-    // دالة اختراق الذاكرة (Memory Patching) لتفعيل الهاك
     bool injectPayload(uint64_t targetAddress, const std::vector<uint8_t>& payload) {
         mach_port_t task;
         task_for_pid(mach_task_self(), getpid(), &task);
         
-        // تغيير صلاحيات الذاكرة لتسمح بالكتابة (Bypassing Read-Only)
         kern_return_t kr = vm_protect(task, targetAddress, payload.size(), false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
         if (kr != KERN_SUCCESS) return false;
         
-        // حقن الكود
         vm_write(task, targetAddress, (vm_offset_t)payload.data(), payload.size());
-        
-        // إعادة قفل الذاكرة
         vm_protect(task, targetAddress, payload.size(), false, VM_PROT_READ | VM_PROT_EXECUTE);
         
-        // مسح الكاش العتادي لضمان تنفيذ الكود الجديد
         sys_icache_invalidate((void*)targetAddress, payload.size());
         return true;
     }
     
-    // قراءة الذاكرة
     template <typename T>
     T readMemory(uint64_t address) {
         T value;
@@ -96,7 +99,6 @@ public:
         if (anoHandle) {
             void* reportFunc = dlsym(anoHandle, CRYPTO_STR("AnoSDKGetReportData").c_str());
             if (reportFunc) {
-                // حقن كود Assembly (RET) لإرجاع صفر فوراً
                 std::vector<uint8_t> retPayload = {0xC0, 0x03, 0x5F, 0xD6}; 
                 SovereignArsenal::injectPayload((uint64_t)reportFunc, retPayload);
                 NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("🦅 [AnoSDK] Reporting Mechanism Lobotomized.").c_str()]);
@@ -112,11 +114,10 @@ class SovereignCore {
 private:
     std::mt19937 _entropy;
 
-    // استدعاء مباشر للنواة (SVC 80)
     __attribute__((always_inline))
     void _stealth_init() {
-        register long x16 __asm__("x16") = 26; // SYS_ptrace
-        register long x0  __asm__("x0")  = 31; // PT_DENY_ATTACH
+        register long x16 __asm__("x16") = 26; 
+        register long x0  __asm__("x0")  = 31; 
         register long x1  __asm__("x1")  = 0;
         register long x2  __asm__("x2")  = 0;
         __asm__ volatile ("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory" );
@@ -127,7 +128,6 @@ public:
         _stealth_init();
     }
 
-    // محرك الأنسنة (Bezier Biological Motion)
     CGPoint generateAimTrajectory(CGPoint current, CGPoint target, float t) {
         std::uniform_real_distribution<float> jitter(-8.0f, 8.0f);
         CGPoint p1 = { (current.x + target.x)/2.1f + jitter(_entropy), (current.y + target.y)/2.1f + jitter(_entropy) };
@@ -165,12 +165,10 @@ public:
 }
 
 - (void)activateWeapons {
-    // تفعيل شلل الحماية
     AnoSDKNeutralizer::executeLobotomy();
     
-    // مثال لتفعيل أسلحة الهاك (تعديل الارتداد)
     uint64_t noRecoilOffset = 0x100A4B2C; 
-    std::vector<uint8_t> nopInstruction = {0x1F, 0x20, 0x03, 0xD5}; // NOP in ARM64
+    std::vector<uint8_t> nopInstruction = {0x1F, 0x20, 0x03, 0xD5}; 
     SovereignArsenal::injectPayload(noRecoilOffset, nopInstruction);
     
     NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("⚔️ [Weapons] Arsenal Active. Memory Patched.").c_str()]);
@@ -192,7 +190,6 @@ static void ignite_sovereign_shield() {
         NSLog(@"🦅 [%@] TIER: ABSOLUTE.", logMsg);
         NSLog(@"💎 [Integrity] Architect Seal: 0x%lX", hash);
 
-        // تشغيل الدرع والأسلحة معاً
         [[AmarShieldZeus sovereignEntry] activateWeapons];
     }
 }
