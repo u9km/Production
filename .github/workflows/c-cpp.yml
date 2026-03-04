@@ -35,19 +35,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # الخطوة السحرية الجديدة: تحميل أداة التوقيع ldid
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build Dylib
+      - name: Build Tweak
         run: |
           make clean
           make package FINALPACKAGE=1
         
+      # هذه الخطوة الجديدة تسحب الدايلب فقط وتضعه في مجلد مؤقت مسطح بدون مسارات
+      - name: Extract Dylib Only
+        run: |
+          mkdir -p Final_Dylib
+          find .theos/obj -name "*.dylib" -type f -exec cp {} Final_Dylib/ \;
+
+      # رفع الملف المباشر بدون أي مجلدات زائدة
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-Ready
-          path: |
-            .theos/obj/**/*.dylib
-            packages/*.deb
+          name: AmarShield-Dylib
+          path: Final_Dylib/*.dylib
