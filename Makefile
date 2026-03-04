@@ -15,6 +15,7 @@ AmarShield_FRAMEWORKS = Foundation UIKit CoreGraphics QuartzCore Security AdSupp
 
 # إعدادات المترجم
 AmarShield_CFLAGS = -fobjc-arc
-AmarShield_CCFLAGS = -std=c++11
+# تم التحديث لدعم أحدث تقنيات C++20 مع تفعيل تحسينات الأداء (-O2) لتسريع التشفير
+AmarShield_CCFLAGS = -std=c++20 -O2
 
 include $(THEOS_MAKE_PATH)/tweak.mk
