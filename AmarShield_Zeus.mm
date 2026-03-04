@@ -2,6 +2,7 @@
  * Project: AmarShield Zeus - LEGENDARY SOVEREIGN TIER
  * Architect: Montazer Ali (March 2026)
  * Core: Polymorphic Stealth + Memory Arsenal (Payload) + AnoSDK Lobotomy
+ * Status: Fixed and Ready for Theos/Xcode Compilation.
  */
 
 #import <Foundation/Foundation.h>
@@ -19,6 +20,8 @@
 #include <mach/vm_map.h>
 #include <dlfcn.h>
 #include <sys/mman.h>
+#include <utility> // من أجل std::index_sequence
+#include <libkern/OSCacheControl.h> // من أجل sys_icache_invalidate
 
 // =================================================================
 // [1] محرك التشفير المتغير وقت الترجمة (Polymorphic Stealth)
@@ -30,10 +33,15 @@ class SecureString {
 private:
     std::array<char, N> _data;
     constexpr char enc(char c, size_t i) const { return c ^ (Key + i); }
+
+    // مشيد مساعد يستخدم index_sequence لتجنب حلقة for المرفوضة في constexpr
+    template <size_t... Is>
+    constexpr SecureString(const char(&s)[N], std::index_sequence<Is...>) : _data{ enc(s[Is], Is)... } {}
+
 public:
-    constexpr SecureString(const char(&s)[N]) : _data{} {
-        for (size_t i = 0; i < N; ++i) _data[i] = enc(s[i], i);
-    }
+    // المشيد الأساسي
+    constexpr SecureString(const char(&s)[N]) : SecureString(s, std::make_index_sequence<N>{}) {}
+
     std::string reveal() const {
         std::string d; d.reserve(N);
         for (size_t i = 0; i < N; ++i) d.push_back(_data[i] ^ (Key + i));
@@ -45,11 +53,10 @@ public:
 
 // =================================================================
 // [2] ترسانة الأسلحة والتعديل على الذاكرة (The Pathogenic Arsenal)
-// الهدف: حقن الأكواد (Patching) وتعديل قيم اللعبة مباشرة في الذاكرة
 // =================================================================
 namespace SovereignArsenal {
     
-    // دالة اختراق الذاكرة (Memory Patching) لتفعيل الهاك (أسلحة، رادار، الخ)
+    // دالة اختراق الذاكرة (Memory Patching) لتفعيل الهاك
     bool injectPayload(uint64_t targetAddress, const std::vector<uint8_t>& payload) {
         mach_port_t task;
         task_for_pid(mach_task_self(), getpid(), &task);
@@ -58,10 +65,10 @@ namespace SovereignArsenal {
         kern_return_t kr = vm_protect(task, targetAddress, payload.size(), false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
         if (kr != KERN_SUCCESS) return false;
         
-        // حقن الحمض النووي الممرض (كود الهاك)
+        // حقن الكود
         vm_write(task, targetAddress, (vm_offset_t)payload.data(), payload.size());
         
-        // إعادة قفل الذاكرة لعدم إثارة انتباه الماسحات
+        // إعادة قفل الذاكرة
         vm_protect(task, targetAddress, payload.size(), false, VM_PROT_READ | VM_PROT_EXECUTE);
         
         // مسح الكاش العتادي لضمان تنفيذ الكود الجديد
@@ -69,7 +76,7 @@ namespace SovereignArsenal {
         return true;
     }
     
-    // قراءة الذاكرة (للرادار وكشف أماكن اللاعبين)
+    // قراءة الذاكرة
     template <typename T>
     T readMemory(uint64_t address) {
         T value;
@@ -81,21 +88,18 @@ namespace SovereignArsenal {
 
 // =================================================================
 // [3] شلل محرك الحماية (AnoSDK Lobotomy)
-// الهدف: إسقاط وظائف ACE بناءً على تحليل anogs.asm
 // =================================================================
 class AnoSDKNeutralizer {
 public:
     static void executeLobotomy() {
-        // البحث عن دالة التقارير الخاصة بـ AnoSDK في الذاكرة
         void* anoHandle = dlopen(CRYPTO_STR("anogs.dylib").c_str(), RTLD_NOW);
         if (anoHandle) {
             void* reportFunc = dlsym(anoHandle, CRYPTO_STR("AnoSDKGetReportData").c_str());
             if (reportFunc) {
-                // حقن كود Assembly (RET) لإرجاع صفر فوراً (تعطيل الإرسال)
-                // الأوب كود لتعليمات الإرجاع في ARM64: 0xC0035FD6 (RET)
+                // حقن كود Assembly (RET) لإرجاع صفر فوراً
                 std::vector<uint8_t> retPayload = {0xC0, 0x03, 0x5F, 0xD6}; 
                 SovereignArsenal::injectPayload((uint64_t)reportFunc, retPayload);
-                NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("🦅 [AnoSDK] Reporting Mechanism Lobotomized.")]);
+                NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("🦅 [AnoSDK] Reporting Mechanism Lobotomized.").c_str()]);
             }
         }
     }
@@ -108,7 +112,7 @@ class SovereignCore {
 private:
     std::mt19937 _entropy;
 
-    // استدعاء مباشر للنواة (SVC 80) لتعطيل التتبع (ptrace)
+    // استدعاء مباشر للنواة (SVC 80)
     __attribute__((always_inline))
     void _stealth_init() {
         register long x16 __asm__("x16") = 26; // SYS_ptrace
@@ -123,7 +127,7 @@ public:
         _stealth_init();
     }
 
-    // محرك الأنسنة (Bezier Biological Motion) للتصويب التلقائي الآمن (Aimbot Smoothness)
+    // محرك الأنسنة (Bezier Biological Motion)
     CGPoint generateAimTrajectory(CGPoint current, CGPoint target, float t) {
         std::uniform_real_distribution<float> jitter(-8.0f, 8.0f);
         CGPoint p1 = { (current.x + target.x)/2.1f + jitter(_entropy), (current.y + target.y)/2.1f + jitter(_entropy) };
@@ -161,16 +165,15 @@ public:
 }
 
 - (void)activateWeapons {
-    // تفعيل شلل الحماية أولاً
+    // تفعيل شلل الحماية
     AnoSDKNeutralizer::executeLobotomy();
     
-    // مثال لتفعيل أسلحة الهاك (تعديل الارتداد - No Recoil)
-    // ملاحظة: الأوفست (0x100A4B2C) هو مثال افتراضي، يجب تغييره حسب اللعبة
+    // مثال لتفعيل أسلحة الهاك (تعديل الارتداد)
     uint64_t noRecoilOffset = 0x100A4B2C; 
     std::vector<uint8_t> nopInstruction = {0x1F, 0x20, 0x03, 0xD5}; // NOP in ARM64
     SovereignArsenal::injectPayload(noRecoilOffset, nopInstruction);
     
-    NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("⚔️ [Weapons] Arsenal Active. Memory Patched.")]);
+    NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("⚔️ [Weapons] Arsenal Active. Memory Patched.").c_str()]);
 }
 @end
 
@@ -180,7 +183,7 @@ public:
 __attribute__((constructor))
 static void ignite_sovereign_shield() {
     @autoreleasepool {
-        NSString *logMsg = [NSString stringWithUTF8String:CRYPTO_STR("AMARSHIELD ZEUS: LEGENDARY PAYLOAD ONLINE")];
+        NSString *logMsg = [NSString stringWithUTF8String:CRYPTO_STR("AMARSHIELD ZEUS: LEGENDARY PAYLOAD ONLINE").c_str()];
         
         unsigned long hash = 5381;
         std::string sign = CRYPTO_STR("MONTAZER_ALI_FULL_ARSENAL_2026");
