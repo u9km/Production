@@ -1,210 +1,195 @@
-#import <UIKit/UIKit.h>
+/**
+ * Project: AmarShield Zeus - LEGENDARY SOVEREIGN TIER
+ * Architect: Montazer Ali (March 2026)
+ * Core: Polymorphic Stealth + Memory Arsenal (Payload) + AnoSDK Lobotomy
+ */
+
 #import <Foundation/Foundation.h>
-#import <AdSupport/AdSupport.h>
+#import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#include <stdio.h>       // تمت الإضافة: لدعم fopen و FILE
-#include <sys/stat.h>    // لدعم stat
-#include <sys/sysctl.h>  // لدعم sysctl
-#include <sys/socket.h>  // لدعم sendto
-#include <mach/mach.h>   // تمت الإضافة: لدعم vm_read
-#include <dlfcn.h>       // لدعم dlsym
-#include <math.h>        // لدعم الرياضيات
+#import <objc/message.h>
+#include <vector>
+#include <cmath>
+#include <random>
+#include <string>
+#include <thread>
+#include <atomic>
+#include <array>
+#include <mach/mach.h>
+#include <mach/vm_map.h>
+#include <dlfcn.h>
+#include <sys/mman.h>
 
 // =================================================================
-// [الأساسيات] تعريف هيكل الربط (Fishhook)
+// [1] محرك التشفير المتغير وقت الترجمة (Polymorphic Stealth)
 // =================================================================
-struct rebinding { const char *name; void *replacement; void **replaced; };
-extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
+#define RANDOM_SEED (__TIME__[7] - '0') * 1ULL + (__TIME__[6] - '0') * 10ULL
 
-// =================================================================
-// 1. محرك تجميد البصمة الرقمية (Black Identity Freezer)
-// =================================================================
-static NSString *const BLACK_STATIC_FINGERPRINT = @"A1B2C3D4-E5F6-4A1B-8C9D-0123456789AB";
-
-// تجميد IDFV (معرف المطور)
-static NSUUID* (*orig_idfv)(id, SEL);
-static NSUUID* my_idfv(id self, SEL _cmd) {
-    return [[NSUUID alloc] initWithUUIDString:BLACK_STATIC_FINGERPRINT];
-}
-
-// تجميد IDFA (معرف الإعلانات)
-static NSUUID* (*orig_idfa)(id, SEL);
-static NSUUID* my_idfa(id self, SEL _cmd) {
-    return [[NSUUID alloc] initWithUUIDString:BLACK_STATIC_FINGERPRINT];
-}
-
-void FreezeDigitalSignature() {
-    Method idfvMethod = class_getInstanceMethod([UIDevice class], @selector(identifierForVendor));
-    if (idfvMethod) {
-        orig_idfv = (NSUUID* (*)(id, SEL))method_getImplementation(idfvMethod);
-        method_setImplementation(idfvMethod, (IMP)my_idfv);
+template <size_t N, char Key>
+class SecureString {
+private:
+    std::array<char, N> _data;
+    constexpr char enc(char c, size_t i) const { return c ^ (Key + i); }
+public:
+    constexpr SecureString(const char(&s)[N]) : _data{} {
+        for (size_t i = 0; i < N; ++i) _data[i] = enc(s[i], i);
     }
+    std::string reveal() const {
+        std::string d; d.reserve(N);
+        for (size_t i = 0; i < N; ++i) d.push_back(_data[i] ^ (Key + i));
+        if (!d.empty() && d.back() == '\0') d.pop_back();
+        return d;
+    }
+};
+#define CRYPTO_STR(str) (SecureString<sizeof(str), RANDOM_SEED>(str).reveal())
 
-    Class asManagerClass = objc_getClass("ASIdentifierManager");
-    if (asManagerClass) {
-        Method idfaMethod = class_getInstanceMethod(asManagerClass, @selector(advertisingIdentifier));
-        if (idfaMethod) {
-            orig_idfa = (NSUUID* (*)(id, SEL))method_getImplementation(idfaMethod);
-            method_setImplementation(idfaMethod, (IMP)my_idfa);
+// =================================================================
+// [2] ترسانة الأسلحة والتعديل على الذاكرة (The Pathogenic Arsenal)
+// الهدف: حقن الأكواد (Patching) وتعديل قيم اللعبة مباشرة في الذاكرة
+// =================================================================
+namespace SovereignArsenal {
+    
+    // دالة اختراق الذاكرة (Memory Patching) لتفعيل الهاك (أسلحة، رادار، الخ)
+    bool injectPayload(uint64_t targetAddress, const std::vector<uint8_t>& payload) {
+        mach_port_t task;
+        task_for_pid(mach_task_self(), getpid(), &task);
+        
+        // تغيير صلاحيات الذاكرة لتسمح بالكتابة (Bypassing Read-Only)
+        kern_return_t kr = vm_protect(task, targetAddress, payload.size(), false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+        if (kr != KERN_SUCCESS) return false;
+        
+        // حقن الحمض النووي الممرض (كود الهاك)
+        vm_write(task, targetAddress, (vm_offset_t)payload.data(), payload.size());
+        
+        // إعادة قفل الذاكرة لعدم إثارة انتباه الماسحات
+        vm_protect(task, targetAddress, payload.size(), false, VM_PROT_READ | VM_PROT_EXECUTE);
+        
+        // مسح الكاش العتادي لضمان تنفيذ الكود الجديد
+        sys_icache_invalidate((void*)targetAddress, payload.size());
+        return true;
+    }
+    
+    // قراءة الذاكرة (للرادار وكشف أماكن اللاعبين)
+    template <typename T>
+    T readMemory(uint64_t address) {
+        T value;
+        vm_size_t size = sizeof(T);
+        vm_read_overwrite(mach_task_self(), address, size, (vm_address_t)&value, &size);
+        return value;
+    }
+}
+
+// =================================================================
+// [3] شلل محرك الحماية (AnoSDK Lobotomy)
+// الهدف: إسقاط وظائف ACE بناءً على تحليل anogs.asm
+// =================================================================
+class AnoSDKNeutralizer {
+public:
+    static void executeLobotomy() {
+        // البحث عن دالة التقارير الخاصة بـ AnoSDK في الذاكرة
+        void* anoHandle = dlopen(CRYPTO_STR("anogs.dylib").c_str(), RTLD_NOW);
+        if (anoHandle) {
+            void* reportFunc = dlsym(anoHandle, CRYPTO_STR("AnoSDKGetReportData").c_str());
+            if (reportFunc) {
+                // حقن كود Assembly (RET) لإرجاع صفر فوراً (تعطيل الإرسال)
+                // الأوب كود لتعليمات الإرجاع في ARM64: 0xC0035FD6 (RET)
+                std::vector<uint8_t> retPayload = {0xC0, 0x03, 0x5F, 0xD6}; 
+                SovereignArsenal::injectPayload((uint64_t)reportFunc, retPayload);
+                NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("🦅 [AnoSDK] Reporting Mechanism Lobotomized.")]);
+            }
         }
     }
+};
+
+// =================================================================
+// [4] النواة العميقة (Kernel Bastion & Bezier Entropy)
+// =================================================================
+class SovereignCore {
+private:
+    std::mt19937 _entropy;
+
+    // استدعاء مباشر للنواة (SVC 80) لتعطيل التتبع (ptrace)
+    __attribute__((always_inline))
+    void _stealth_init() {
+        register long x16 __asm__("x16") = 26; // SYS_ptrace
+        register long x0  __asm__("x0")  = 31; // PT_DENY_ATTACH
+        register long x1  __asm__("x1")  = 0;
+        register long x2  __asm__("x2")  = 0;
+        __asm__ volatile ("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory" );
+    }
+
+public:
+    SovereignCore() : _entropy(std::random_device{}()) {
+        _stealth_init();
+    }
+
+    // محرك الأنسنة (Bezier Biological Motion) للتصويب التلقائي الآمن (Aimbot Smoothness)
+    CGPoint generateAimTrajectory(CGPoint current, CGPoint target, float t) {
+        std::uniform_real_distribution<float> jitter(-8.0f, 8.0f);
+        CGPoint p1 = { (current.x + target.x)/2.1f + jitter(_entropy), (current.y + target.y)/2.1f + jitter(_entropy) };
+        CGPoint p2 = { (current.x + target.x)/1.6f + jitter(_entropy), (current.y + target.y)/1.6f + jitter(_entropy) };
+
+        float u = 1.0f - t; float tt = t * t; float uu = u * u;
+        return {
+            (uu * u * current.x) + (3 * uu * t * p1.x) + (3 * u * tt * p2.x) + (tt * t * target.x),
+            (uu * u * current.y) + (3 * uu * t * p1.y) + (3 * u * tt * p2.y) + (tt * t * target.y)
+        };
+    }
+};
+
+// =================================================================
+// [5] البوابة السيادية (Objective-C++ Bridge)
+// =================================================================
+@interface AmarShieldZeus : NSObject {
+    SovereignCore *_core;
+}
++ (instancetype)sovereignEntry;
+- (void)activateWeapons;
+@end
+
+@implementation AmarShieldZeus
++ (instancetype)sovereignEntry {
+    static AmarShieldZeus *instance = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ instance = [[self alloc] init]; });
+    return instance;
 }
 
-// =================================================================
-// 2. نظام النجاة السلوكي للإيمبوت (Behavioral Survival Engine)
-// =================================================================
-struct Vector2 { float x, y; };
+- (instancetype)init {
+    if (self = [super init]) { _core = new SovereignCore(); }
+    return self;
+}
 
-Vector2 ApplyHumanizedAim(Vector2 current, Vector2 target, float baseSmooth) {
-    Vector2 result;
-    float dx = target.x - current.x;
-    float dy = target.y - current.y;
+- (void)activateWeapons {
+    // تفعيل شلل الحماية أولاً
+    AnoSDKNeutralizer::executeLobotomy();
     
-    // تلطيخ بشري عشوائي (Jitter)
-    float jitter = ((float)arc4random_uniform(100) / 1000.0f) - 0.05f;
-    dx += jitter; dy += jitter;
-
-    // النعومة الديناميكية
-    float dist = sqrtf(dx*dx + dy*dy);
-    float dynamicSmooth = (dist < 5.0f) ? baseSmooth * 1.8f : baseSmooth;
+    // مثال لتفعيل أسلحة الهاك (تعديل الارتداد - No Recoil)
+    // ملاحظة: الأوفست (0x100A4B2C) هو مثال افتراضي، يجب تغييره حسب اللعبة
+    uint64_t noRecoilOffset = 0x100A4B2C; 
+    std::vector<uint8_t> nopInstruction = {0x1F, 0x20, 0x03, 0xD5}; // NOP in ARM64
+    SovereignArsenal::injectPayload(noRecoilOffset, nopInstruction);
     
-    result.x = current.x + (dx / dynamicSmooth);
-    result.y = current.y + (dy / dynamicSmooth);
-    return result;
+    NSLog(@"%@", [NSString stringWithUTF8String:CRYPTO_STR("⚔️ [Weapons] Arsenal Active. Memory Patched.")]);
 }
+@end
 
 // =================================================================
-// 3. تخدير الـ SDK (AnoSDK Lobotomy)
+// [6] الانفجار العظيم (The Master Entry)
 // =================================================================
-void* my_AnoSDKGetReportData(int* out_size) {
-    if (out_size) *out_size = 0;
-    return NULL; 
-}
-int my_AnoSDKInit(void* a1, void* a2, void* a3) { return 1; }
-void my_AnoSDKSetUserInfo(void* i) { return; }
+__attribute__((constructor))
+static void ignite_sovereign_shield() {
+    @autoreleasepool {
+        NSString *logMsg = [NSString stringWithUTF8String:CRYPTO_STR("AMARSHIELD ZEUS: LEGENDARY PAYLOAD ONLINE")];
+        
+        unsigned long hash = 5381;
+        std::string sign = CRYPTO_STR("MONTAZER_ALI_FULL_ARSENAL_2026");
+        for (char c : sign) hash = ((hash << 5) + hash) + c;
 
-// =================================================================
-// 4. المحرقة الغيابية (Offline Ban Destructor & Time Freezing)
-// =================================================================
+        NSLog(@"🦅 [%@] TIER: ABSOLUTE.", logMsg);
+        NSLog(@"💎 [Integrity] Architect Seal: 0x%lX", hash);
 
-// [أ] هوك open - حجب إنشاء ملفات التقارير والشهادة
-static int (*orig_open)(const char *path, int oflag, ...);
-int my_open(const char *path, int oflag, ...) {
-    if (path && (strstr(path, "comm.dat") || strstr(path, "CrashSight") || 
-                 strstr(path, "anogs") || strstr(path, "Saved/Logs") || 
-                 strstr(path, "embedded.mobileprovision"))) {
-        return orig_open("/dev/null", oflag); 
+        // تشغيل الدرع والأسلحة معاً
+        [[AmarShieldZeus sovereignEntry] activateWeapons];
     }
-    va_list args; 
-    va_start(args, oflag); 
-    mode_t mode = (oflag & O_CREAT) ? va_arg(args, int) : 0; 
-    va_end(args);
-    return orig_open(path, oflag, mode);
-}
-
-// [ب] هوك fopen - دعم إضافي لمنع الكتابة (تم تصحيحه)
-static FILE* (*orig_fopen)(const char *filename, const char *mode);
-FILE* my_fopen(const char *filename, const char *mode) {
-    if (filename && (strstr(filename, "comm.dat") || strstr(filename, "CrashSight") || strstr(filename, "anogs"))) {
-        return orig_fopen("/dev/null", mode);
-    }
-    return orig_fopen(filename, mode);
-}
-
-// [ج] هوك stat - إخفاء الملفات وتجميد زمن اللعبة (بدون restrict لتوافق C++)
-static int (*orig_stat)(const char *path, struct stat *buf);
-int my_stat(const char *path, struct stat *buf) {
-    if (path && (strstr(path, "comm.dat") || strstr(path, "CrashSight") || strstr(path, "embedded.mobileprovision"))) {
-        return -1; // إيهام الحماية أن الملفات غير موجودة
-    }
-    
-    int ret = orig_stat(path, buf);
-    
-    // تجميد زمن تعديل الملفات لكسر فحص الهاش (Hash Check Bypass)
-    if (ret == 0 && path && strstr(path, ".app")) {
-        buf->st_mtimespec.tv_sec = 1704067200; // 1 Jan 2024
-        buf->st_ctimespec.tv_sec = 1704067200;
-        buf->st_birthtimespec.tv_sec = 1704067200;
-    }
-    return ret;
-}
-
-// =================================================================
-// 5. حماية الشبكة والهوية (Network & Identity Shield)
-// =================================================================
-
-static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
-OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
-    return errSecItemNotFound; 
-}
-
-static ssize_t (*orig_sendto)(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al);
-ssize_t my_sendto(int s, const void *b, size_t l, int f, const struct sockaddr *d, socklen_t al) {
-    if (b && l > 0) {
-        const char *payload = (const char *)b;
-        if (strstr(payload, "pic_data") || strstr(payload, "Report") || strstr(payload, "screenshot")) return l; 
-    }
-    return orig_sendto(s, b, l, f, d, al);
-}
-
-// =================================================================
-// 6. حماية الذاكرة والنظام (Anti-Memory Scan & Anti-Debug)
-// =================================================================
-
-static kern_return_t (*orig_vm_read)(vm_map_t, vm_address_t, vm_size_t, vm_offset_t*, mach_msg_type_number_t*);
-kern_return_t my_vm_read(vm_map_t t, vm_address_t a, vm_size_t s, vm_offset_t* d, mach_msg_type_number_t* dc) {
-    return KERN_FAILURE; 
-}
-
-static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-    if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
-        if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
-            struct kinfo_proc *info = (struct kinfo_proc *)oldp;
-            info->kp_proc.p_flag &= ~P_TRACED; // مسح علامة التتبع
-        }
-    }
-    return ret;
-}
-
-// =================================================================
-// 7. البوابة الرئيسية والدخول السيادي (Master Hooks & Init)
-// =================================================================
-static void* (*orig_dlsym)(void *h, const char *s);
-void* my_dlsym(void *h, const char *s) {
-    if (s) {
-        if (strcmp(s, "AnoSDKInit") == 0) return (void*)my_AnoSDKInit;
-        if (strcmp(s, "AnoSDKGetReportData") == 0) return (void*)my_AnoSDKGetReportData;
-        if (strcmp(s, "SecItemCopyMatching") == 0) return (void*)my_SecItemCopyMatching;
-        if (strcmp(s, "vm_read") == 0) return (void*)my_vm_read;
-        if (strcmp(s, "sysctl") == 0) return (void*)my_sysctl;
-    }
-    return orig_dlsym(h, s);
-}
-
-void IgniteBlackSovereignUltimate() {
-    // 1. تجميد البصمة الرقمية فوراً
-    FreezeDigitalSignature();
-
-    // 2. ربط جميع الهوكات الشبحية بدقة
-    struct rebinding r[] = { 
-        {"dlsym", (void*)my_dlsym, (void**)&orig_dlsym},
-        {"open", (void*)my_open, (void**)&orig_open},
-        {"fopen", (void*)my_fopen, (void**)&orig_fopen},
-        {"stat", (void*)my_stat, (void**)&orig_stat},
-        {"sendto", (void*)my_sendto, (void**)&orig_sendto},
-        {"sysctl", (void*)my_sysctl, (void**)&orig_sysctl},
-        {"vm_read", (void*)my_vm_read, (void**)&orig_vm_read},
-        {"SecItemCopyMatching", (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching}
-    };
-    
-    // تسجيل 8 دوال للربط
-    rebind_symbols(r, 8);
-
-    NSLog(@"💎 [AmarShield Zeus] PREMIUM TIER ONLINE. Zero Crashes. Identity Locked. Offline Ban Obliterated.");
-}
-
-__attribute__((constructor)) static void black_master_entry() {
-    IgniteBlackSovereignUltimate();
 }
