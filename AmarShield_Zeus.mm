@@ -1,11 +1,26 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
+#include <sys/sysctl.h>
+#include <sys/socket.h>
+#include <mach/mach.h>
+#include <dlfcn.h>
+#include <math.h>
+#include <stdarg.h>
 
-// --- [ الجزء الأول: تقنية التشفير الشبحية 2026 (Compile-Time String Obfuscation) ] ---
+// --- تعريف هيكل الربط (Fishhook) لإعادة توجيه العناوين ---
+struct rebinding { const char *name; void *replacement; void **replaced; };
+extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
+
+// =================================================================
+// [ الجزء الأول: تقنية التشفير الشبحية 2026 (متوافقة مع جميع المترجمات) ]
+// =================================================================
 
 namespace AmmarShield {
-    // توليد مفتاح عشوائي وقت الترجمة بناءً على الوقت والعداد
+    template <unsigned int... Is> struct index_sequence {};
+    template <unsigned int N, unsigned int... Is> struct make_index_sequence : make_index_sequence<N - 1, N - 1, Is...> {};
+    template <unsigned int... Is> struct make_index_sequence<0, Is...> { typedef index_sequence<Is...> type; };
+
     constexpr int seed_gen(int counter) {
         return (__TIME__[7] - '0') * 1 + (__TIME__[6] - '0') * 10 +
                (__TIME__[4] - '0') * 60 + (__TIME__[3] - '0') * 600 +
@@ -16,15 +31,10 @@ namespace AmmarShield {
     struct Obfuscator {
         char data[N];
 
-        // التشفير وقت الترجمة (XOR + إزاحة)
-        constexpr Obfuscator(const char* str) : data{0} {
-            for (unsigned int i = 0; i < N; ++i) {
-                char c = str[i];
-                data[i] = (c ^ K) + (K % 10); 
-            }
-        }
+        template <unsigned int... Is>
+        constexpr Obfuscator(const char* str, index_sequence<Is...>)
+            : data{ static_cast<char>((str[Is] ^ K) + (K % 10))... } {}
 
-        // فك التشفير وقت التشغيل (مخفي برمجياً في الذاكرة فقط)
         __attribute__((always_inline)) const char* decrypt() {
             for (unsigned int i = 0; i < N; ++i) {
                 data[i] = (data[i] - (K % 10)) ^ K;
@@ -34,11 +44,113 @@ namespace AmmarShield {
     };
 }
 
-// الماكرو السحري لتشفير النصوص
-#define OBFUSCATE(str) (AmmarShield::Obfuscator<sizeof(str), AmmarShield::seed_gen(__COUNTER__)>(str).decrypt())
+#define OBFUSCATE(str) (AmmarShield::Obfuscator<sizeof(str), AmmarShield::seed_gen(__COUNTER__)>(str, typename AmmarShield::make_index_sequence<sizeof(str)>::type()).decrypt())
 
 
-// --- [ الجزء الثاني: محرك الربط الشبح (مخفي عن جدول الرموز) ] ---
+// =================================================================
+// [ الجزء الثاني: ملف ttyy.mm - محرك النجاة والحماية من السيرفر ]
+// =================================================================
+
+// 1. محرك النجاة (Survival Aim Logic) - التمويه السلوكي
+struct Vector2 { float x, y; };
+
+__attribute__((visibility("hidden")))
+Vector2 ApplySurvivalAim(Vector2 current, Vector2 target, float baseSmooth) {
+    Vector2 result;
+    float dx = target.x - current.x;
+    float dy = target.y - current.y;
+    
+    // إضافة "التلطيخ البشري" (Micro-Jitter) لكسر الكشف الرياضي في السيرفر
+    float jitter = ((float)arc4random_uniform(100) / 1200.0f) - 0.04f;
+    dx += jitter; dy += jitter;
+
+    // النعومة الديناميكية (التسارع عند البعد والتباطؤ عند الاقتراب)
+    float distance = sqrtf(dx*dx + dy*dy);
+    float dynamicSmooth = (distance < 6.0f) ? baseSmooth * 1.6f : baseSmooth;
+    
+    result.x = current.x + (dx / dynamicSmooth);
+    result.y = current.y + (dy / dynamicSmooth);
+    
+    return result;
+}
+
+// 2. تخدير الـ SDK (AnoSDK Master Lobotomy)
+__attribute__((visibility("hidden"))) void* my_AnoSDKGetReportData(int* out_size) { if (out_size) *out_size = 0; return NULL; }
+__attribute__((visibility("hidden"))) int my_AnoSDKInit(void* a1, void* a2, void* a3) { return 1; }
+__attribute__((visibility("hidden"))) void my_AnoSDKOnRecvData(void* d, int s) { return; }
+__attribute__((visibility("hidden"))) void my_AnoSDKSetUserInfo(void* i) { return; }
+
+// 3. درع الذاكرة والنظام (Kernel & Memory Stealth)
+static kern_return_t (*orig_vm_read)(vm_map_t, vm_address_t, vm_size_t, vm_offset_t*, mach_msg_type_number_t*);
+__attribute__((visibility("hidden")))
+kern_return_t my_vm_read(vm_map_t target_task, vm_address_t address, vm_size_t size, vm_offset_t* data, mach_msg_type_number_t* dataCnt) {
+    return KERN_FAILURE; 
+}
+
+static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+__attribute__((visibility("hidden")))
+int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+    if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
+        if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
+            struct kinfo_proc *info = (struct kinfo_proc *)oldp;
+            info->kp_proc.p_flag &= ~P_TRACED; // مسح علامة التتبع (Debugger Flag)
+        }
+    }
+    return ret;
+}
+
+// 4. حماية الشهادة والشبكة (Certificate & Report Mirage)
+static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
+__attribute__((visibility("hidden")))
+OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
+    return errSecItemNotFound; 
+}
+
+static ssize_t (*orig_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
+__attribute__((visibility("hidden")))
+ssize_t my_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+    if (buf && len > 0) {
+        const char *p = (const char *)buf;
+        // تمت إضافة || (أو) لكي لا يحدث خطأ برمجي وتم تشفير الكلمات
+        if (strstr(p, OBFUSCATE("Report")) || strstr(p, OBFUSCATE("pic_data")) || strstr(p, OBFUSCATE("screenshot"))) return len;
+    }
+    return orig_sendto(sockfd, buf, len, flags, dest_addr, addrlen);
+}
+
+static int (*orig_open)(const char *path, int oflag, ...);
+__attribute__((visibility("hidden")))
+int my_open(const char *path, int oflag, ...) {
+    // تمت إضافة || وتم تشفير الكلمات الحساسة
+    if (path && (strstr(path, OBFUSCATE("CrashSight")) || strstr(path, OBFUSCATE("Saved/Logs")) || strstr(path, OBFUSCATE("embedded.mobileprovision")))) {
+        return orig_open(OBFUSCATE("/dev/null"), oflag);
+    }
+    va_list args; va_start(args, oflag); 
+    mode_t mode = (oflag & O_CREAT) ? va_arg(args, int) : 0;
+    va_end(args);
+    return orig_open(path, oflag, mode);
+}
+
+// 5. محرك البوابة الرئيسية (Dlsym Master Hook)
+static void* (*orig_dlsym)(void *handle, const char *symbol);
+__attribute__((visibility("hidden")))
+void* my_dlsym(void *handle, const char *symbol) {
+    if (symbol) {
+        if (strcmp(symbol, OBFUSCATE("AnoSDKInit")) == 0) return (void*)my_AnoSDKInit;
+        if (strcmp(symbol, OBFUSCATE("AnoSDKGetReportData")) == 0) return (void*)my_AnoSDKGetReportData;
+        if (strcmp(symbol, OBFUSCATE("vm_read")) == 0) return (void*)my_vm_read;
+        if (strcmp(symbol, OBFUSCATE("sysctl")) == 0) return (void*)my_sysctl;
+        if (strcmp(symbol, OBFUSCATE("sendto")) == 0) return (void*)my_sendto;
+        if (strcmp(symbol, OBFUSCATE("SecItemCopyMatching")) == 0) return (void*)my_SecItemCopyMatching;
+    }
+    return orig_dlsym(handle, symbol);
+}
+
+
+// =================================================================
+// [ الجزء الثالث: محرك الربط الشبح الخاص بـ AmmarVIP ]
+// =================================================================
+
 __attribute__((visibility("hidden")))
 static void _sys_bind(const char* className, const char* selectorName, IMP newImp) {
     Class cls = objc_getClass(className);
@@ -51,18 +163,36 @@ static void _sys_bind(const char* className, const char* selectorName, IMP newIm
     }
 }
 
-
-// --- [ الجزء الثالث: الدوال الوهمية المركزية (بدون أسماء مريبة) ] ---
+// الدوال الوهمية المركزية لـ Obj-C
 __attribute__((visibility("hidden"))) id _sys_id_0(id self, SEL _cmd, ...) { return 0; }
 __attribute__((visibility("hidden"))) BOOL _sys_bool_no(id self, SEL _cmd, ...) { return NO; }
 __attribute__((visibility("hidden"))) BOOL _sys_bool_yes(id self, SEL _cmd, ...) { return YES; }
 __attribute__((visibility("hidden"))) void _sys_void_empty(id self, SEL _cmd, ...) { }
 
 
-// --- [ الجزء الرابع: المحرك الرئيسي لتفعيل كل المسارات المشفرة ] ---
-__attribute__((constructor))
-static void _init_core_services() {
+// =================================================================
+// [ الجزء الرابع: محرك الإقلاع السيادي (Final Entry Point) ]
+// =================================================================
 
+__attribute__((constructor))
+static void IgniteBlackAbsolute_And_AmmarVIP() {
+    
+    // 1. تفعيل حماية Fishhook (من ملف ttyy.mm)
+    struct rebinding r[] = { 
+        {(const char*)OBFUSCATE("dlsym"), (void*)my_dlsym, (void**)&orig_dlsym},
+        {(const char*)OBFUSCATE("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl},
+        {(const char*)OBFUSCATE("open"), (void*)my_open, (void**)&orig_open},
+        {(const char*)OBFUSCATE("sendto"), (void*)my_sendto, (void**)&orig_sendto},
+        {(const char*)OBFUSCATE("vm_read"), (void*)my_vm_read, (void**)&orig_vm_read},
+        {(const char*)OBFUSCATE("SecItemCopyMatching"), (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching}
+    };
+    rebind_symbols(r, 6);
+    
+    // رسالة السجل مشفرة لمنع كشفها بالنصوص الصريحة
+    NSLog(@"%@", [NSString stringWithUTF8String:OBFUSCATE("💎 [Black Sovereign] V-Absolute Loaded. Welcome, Black. DNS & Recovery Synced.")]);
+
+
+    // 2. تفعيل مسارات الـ VIP (من ملف AmmarVIP.mm) مشفرة بالكامل
     // --- حماية السيرفر والضرر ---
     _sys_bind(OBFUSCATE("serviceCommunication"), OBFUSCATE("getValueForKeypath"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("WeaponProcessor"), OBFUSCATE("CalculateDamage"), (IMP)_sys_id_0);
