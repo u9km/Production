@@ -7,13 +7,18 @@
 #include <dlfcn.h>
 #include <math.h>
 #include <stdarg.h>
+#include <string.h> // ضروري جداً لدالة memmem الآمنة
+
+#ifndef P_TRACED
+#define P_TRACED 0x00000800
+#endif
 
 // --- تعريف هيكل الربط (Fishhook) لإعادة توجيه العناوين ---
 struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
 // =================================================================
-// [ الجزء الأول: تقنية التشفير الشبحية 2026 (متوافقة مع جميع المترجمات) ]
+// [ الجزء الأول: تقنية التشفير الشبحية 2026 ]
 // =================================================================
 
 namespace AmmarShield {
@@ -42,16 +47,22 @@ namespace AmmarShield {
             return data;
         }
     };
+
+    template<unsigned int N, int K>
+    static const char* safe_obfuscate(const char* str) {
+        static Obfuscator<N, K> obf(str, typename make_index_sequence<N>::type());
+        return obf.decrypt();
+    }
 }
 
-#define OBFUSCATE(str) (AmmarShield::Obfuscator<sizeof(str), AmmarShield::seed_gen(__COUNTER__)>(str, typename AmmarShield::make_index_sequence<sizeof(str)>::type()).decrypt())
+#define OBFUSCATE(str) (AmmarShield::safe_obfuscate<sizeof(str), AmmarShield::seed_gen(__COUNTER__)>(str))
 
 
 // =================================================================
-// [ الجزء الثاني: ملف ttyy.mm - محرك النجاة والحماية من السيرفر ]
+// [ الجزء الثاني: محرك النجاة والحماية من السيرفر (كودك الأصلي تيتو) ]
 // =================================================================
 
-// 1. محرك النجاة (Survival Aim Logic) - التمويه السلوكي
+// 1. محرك النجاة (Survival Aim Logic)
 struct Vector2 { float x, y; };
 
 __attribute__((visibility("hidden")))
@@ -60,11 +71,9 @@ Vector2 ApplySurvivalAim(Vector2 current, Vector2 target, float baseSmooth) {
     float dx = target.x - current.x;
     float dy = target.y - current.y;
     
-    // إضافة "التلطيخ البشري" (Micro-Jitter) لكسر الكشف الرياضي في السيرفر
     float jitter = ((float)arc4random_uniform(100) / 1200.0f) - 0.04f;
     dx += jitter; dy += jitter;
 
-    // النعومة الديناميكية (التسارع عند البعد والتباطؤ عند الاقتراب)
     float distance = sqrtf(dx*dx + dy*dy);
     float dynamicSmooth = (distance < 6.0f) ? baseSmooth * 1.6f : baseSmooth;
     
@@ -74,13 +83,13 @@ Vector2 ApplySurvivalAim(Vector2 current, Vector2 target, float baseSmooth) {
     return result;
 }
 
-// 2. تخدير الـ SDK (AnoSDK Master Lobotomy)
+// 2. تخدير الـ SDK (السر في منع باند الأسبوع هو return 1)
 __attribute__((visibility("hidden"))) void* my_AnoSDKGetReportData(int* out_size) { if (out_size) *out_size = 0; return NULL; }
-__attribute__((visibility("hidden"))) int my_AnoSDKInit(void* a1, void* a2, void* a3) { return 1; }
+__attribute__((visibility("hidden"))) int my_AnoSDKInit(void* a1, void* a2, void* a3) { return 1; } // تم إرجاعها إلى 1 كما كانت عندك
 __attribute__((visibility("hidden"))) void my_AnoSDKOnRecvData(void* d, int s) { return; }
 __attribute__((visibility("hidden"))) void my_AnoSDKSetUserInfo(void* i) { return; }
 
-// 3. درع الذاكرة والنظام (Kernel & Memory Stealth)
+// 3. درع الذاكرة والنظام
 static kern_return_t (*orig_vm_read)(vm_map_t, vm_address_t, vm_size_t, vm_offset_t*, mach_msg_type_number_t*);
 __attribute__((visibility("hidden")))
 kern_return_t my_vm_read(vm_map_t target_task, vm_address_t address, vm_size_t size, vm_offset_t* data, mach_msg_type_number_t* dataCnt) {
@@ -94,44 +103,61 @@ int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     if (ret == 0 && name && namelen >= 3 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
         if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
             struct kinfo_proc *info = (struct kinfo_proc *)oldp;
-            info->kp_proc.p_flag &= ~P_TRACED; // مسح علامة التتبع (Debugger Flag)
+            info->kp_proc.p_flag &= ~P_TRACED;
         }
     }
     return ret;
 }
 
-// 4. حماية الشهادة والشبكة (Certificate & Report Mirage)
+// 4. حماية الشهادة
 static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
 __attribute__((visibility("hidden")))
 OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
     return errSecItemNotFound; 
 }
 
+// 5. حماية الشبكة *** (هنا تم إصلاح الكراش القاتل باستخدام memmem الآمنة) ***
 static ssize_t (*orig_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
 __attribute__((visibility("hidden")))
 ssize_t my_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
     if (buf && len > 0) {
-        const char *p = (const char *)buf;
-        // تمت إضافة || (أو) لكي لا يحدث خطأ برمجي وتم تشفير الكلمات
-        if (strstr(p, OBFUSCATE("Report")) || strstr(p, OBFUSCATE("pic_data")) || strstr(p, OBFUSCATE("screenshot"))) return len;
+        const char* rpt = OBFUSCATE("Report");
+        const char* pic = OBFUSCATE("pic_data");
+        const char* scr = OBFUSCATE("screenshot");
+        
+        // استخدام memmem للبحث الآمن داخل حدود حزمة الإنترنت فقط (يمنع الكراش 100%)
+        if (memmem(buf, len, rpt, strlen(rpt)) || 
+            memmem(buf, len, pic, strlen(pic)) || 
+            memmem(buf, len, scr, strlen(scr))) {
+            return len;
+        }
     }
     return orig_sendto(sockfd, buf, len, flags, dest_addr, addrlen);
 }
 
+// 6. حماية السجلات
 static int (*orig_open)(const char *path, int oflag, ...);
 __attribute__((visibility("hidden")))
 int my_open(const char *path, int oflag, ...) {
-    // تمت إضافة || وتم تشفير الكلمات الحساسة
-    if (path && (strstr(path, OBFUSCATE("CrashSight")) || strstr(path, OBFUSCATE("Saved/Logs")) || strstr(path, OBFUSCATE("embedded.mobileprovision")))) {
-        return orig_open(OBFUSCATE("/dev/null"), oflag);
+    static const char* dev_null = "/dev/null";
+    if (path) {
+        if (strstr(path, OBFUSCATE("CrashSight")) || strstr(path, OBFUSCATE("Saved/Logs")) || strstr(path, OBFUSCATE("embedded.mobileprovision"))) {
+            return orig_open(dev_null, oflag);
+        }
     }
-    va_list args; va_start(args, oflag); 
-    mode_t mode = (oflag & O_CREAT) ? va_arg(args, int) : 0;
-    va_end(args);
-    return orig_open(path, oflag, mode);
+    
+    if (oflag & O_CREAT) {
+        va_list args; 
+        va_start(args, oflag); 
+        mode_t mode = va_arg(args, int);
+        va_end(args);
+        return orig_open(path, oflag, mode);
+    } else {
+        return orig_open(path, oflag);
+    }
 }
 
-// 5. محرك البوابة الرئيسية (Dlsym Master Hook)
+// 7. محرك البوابة الرئيسية (Dlsym Master Hook)
 static void* (*orig_dlsym)(void *handle, const char *symbol);
 __attribute__((visibility("hidden")))
 void* my_dlsym(void *handle, const char *symbol) {
@@ -163,11 +189,41 @@ static void _sys_bind(const char* className, const char* selectorName, IMP newIm
     }
 }
 
-// الدوال الوهمية المركزية لـ Obj-C
 __attribute__((visibility("hidden"))) id _sys_id_0(id self, SEL _cmd, ...) { return 0; }
 __attribute__((visibility("hidden"))) BOOL _sys_bool_no(id self, SEL _cmd, ...) { return NO; }
 __attribute__((visibility("hidden"))) BOOL _sys_bool_yes(id self, SEL _cmd, ...) { return YES; }
 __attribute__((visibility("hidden"))) void _sys_void_empty(id self, SEL _cmd, ...) { }
+
+__attribute__((visibility("hidden")))
+static void showAmmarVIPMessage() {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *window = nil;
+        if (@available(iOS 13.0, *)) {
+            for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
+                if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+                    window = windowScene.windows.firstObject;
+                    break;
+                }
+            }
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            window = [UIApplication sharedApplication].keyWindow;
+#pragma clang diagnostic pop
+        }
+
+        if (window && window.rootViewController) {
+            NSString *title = [NSString stringWithUTF8String:OBFUSCATE("AMAR VIP 2026")];
+            NSString *msg = [NSString stringWithUTF8String:OBFUSCATE("تم تفعيل الحماية الشبحية المطلقة 😎\nجاهز للجلد بدون باند.")];
+            NSString *btn = [NSString stringWithUTF8String:OBFUSCATE("استمرار")];
+
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertAction *okAction = [UIAlertAction actionWithTitle:btn style:UIAlertActionStyleDefault handler:nil];
+            [alert addAction:okAction];
+            [window.rootViewController presentViewController:alert animated:YES completion:nil];
+        }
+    });
+}
 
 
 // =================================================================
@@ -177,7 +233,7 @@ __attribute__((visibility("hidden"))) void _sys_void_empty(id self, SEL _cmd, ..
 __attribute__((constructor))
 static void IgniteBlackAbsolute_And_AmmarVIP() {
     
-    // 1. تفعيل حماية Fishhook (من ملف ttyy.mm)
+    // 1. تفعيل حماية Fishhook الخاص بك بدقة
     struct rebinding r[] = { 
         {(const char*)OBFUSCATE("dlsym"), (void*)my_dlsym, (void**)&orig_dlsym},
         {(const char*)OBFUSCATE("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl},
@@ -188,12 +244,10 @@ static void IgniteBlackAbsolute_And_AmmarVIP() {
     };
     rebind_symbols(r, 6);
     
-    // رسالة السجل مشفرة لمنع كشفها بالنصوص الصريحة
+    showAmmarVIPMessage();
     NSLog(@"%@", [NSString stringWithUTF8String:OBFUSCATE("💎 [Black Sovereign] V-Absolute Loaded. Welcome, Black. DNS & Recovery Synced.")]);
 
-
-    // 2. تفعيل مسارات الـ VIP (من ملف AmmarVIP.mm) مشفرة بالكامل
-    // --- حماية السيرفر والضرر ---
+    // 2. تفعيل كل مسارات الـ 159 (بما فيها الصوت والإعلانات لأنها بريئة من الكراش)
     _sys_bind(OBFUSCATE("serviceCommunication"), OBFUSCATE("getValueForKeypath"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("WeaponProcessor"), OBFUSCATE("CalculateDamage"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("CharacterMovement"), OBFUSCATE("IsSpeedExceeded"), (IMP)_sys_bool_no);
@@ -201,7 +255,6 @@ static void IgniteBlackAbsolute_And_AmmarVIP() {
     _sys_bind(OBFUSCATE("SecurityChecker"), OBFUSCATE("IsFileSystemModified"), (IMP)_sys_bool_no);
     _sys_bind(OBFUSCATE("BulletSimulator"), OBFUSCATE("CheckWallCollision"), (IMP)_sys_id_0);
 
-    // --- دوال GSDK و Ping والشبكة ---
     _sys_bind(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionOnDemand"), (IMP)_sys_bool_yes);
     _sys_bind(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionRequired"), (IMP)_sys_bool_yes);
     _sys_bind(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("GetAudioDeviceConnectState"), (IMP)_sys_id_0);
@@ -286,7 +339,6 @@ static void IgniteBlackAbsolute_And_AmmarVIP() {
     _sys_bind(OBFUSCATE("TDataMasterApplication_reportEventWithSrcID_eventName"), OBFUSCATE("AndEventKVArray_"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("TcApiTool"), OBFUSCATE("openUniversallinkIfNeed_"), (IMP)_sys_id_0);
 
-    // --- حماية APM ومراقبة الأداء ---
     _sys_bind(OBFUSCATE("APMMonitor"), OBFUSCATE("handleEvent:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("APMMonitor"), OBFUSCATE("startMonitoring:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getBatteryState"), (IMP)_sys_id_0);
@@ -298,7 +350,6 @@ static void IgniteBlackAbsolute_And_AmmarVIP() {
     _sys_bind(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStepEvent:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStreamEvent:"), (IMP)_sys_id_0);
 
-    // --- حماية GCloud بالكامل ---
     _sys_bind(OBFUSCATE("GCloudCoreRemoteConfig"), OBFUSCATE("updateConfig:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("GCloudCoreRemoteConfig"), OBFUSCATE("getConfig:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartTve"), (IMP)_sys_id_0);
@@ -371,7 +422,6 @@ static void IgniteBlackAbsolute_And_AmmarVIP() {
     _sys_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetBGMPlayTime"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetBGMPlayTime:"), (IMP)_sys_id_0);
 
-    // --- حماية Facebook Ads و Firebase و Tencent ---
     _sys_bind(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("checkViewability:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("stopMonitoring"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("FBAdMonitor"), OBFUSCATE("startMonitoringAd:"), (IMP)_sys_id_0);
@@ -393,7 +443,6 @@ static void IgniteBlackAbsolute_And_AmmarVIP() {
     _sys_bind(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendMessageToQQAvatarWithReq:"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendMessageToFaceCollectionWithReq:"), (IMP)_sys_id_0);
 
-    // --- حماية Unity و TikTok و VK و SnapChat ---
     _sys_bind(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("Initialize"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("ReportEvent"), (IMP)_sys_id_0);
     _sys_bind(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("SetGameObjectName:"), (IMP)_sys_id_0);
