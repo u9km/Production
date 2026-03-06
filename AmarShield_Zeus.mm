@@ -109,12 +109,18 @@ static inline id DynStr(const char* str) {
 }
 
 // =================================================================
-// [ الجزء الثالث: استنساخ الذاكرة الأصلية (تجاوز باند فحص الـ IMP) ]
+// [ الجزء الثالث: حوض الاستنساخ العشوائي المتعدد (Zero-Trace Pooling) ]
 // =================================================================
 namespace NativeSpoof {
-    static IMP ret_0 = NULL;
-    static IMP ret_1 = NULL;
-    static IMP ret_void = NULL;
+    // إنشاء "أحواض" لتخزين ما يصل إلى 300 عنوان مختلف لكل نوع
+    static IMP pool_ret_0[300];
+    static IMP pool_ret_1[300];
+    static IMP pool_ret_void[300];
+    
+    // عدادات لتتبع كم عنوان وجدنا
+    static int count_0 = 0;
+    static int count_1 = 0;
+    static int count_void = 0;
 
     static void ScanGameMemory() {
         const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);
@@ -132,11 +138,23 @@ namespace NativeSpoof {
                             uint32_t *start = (uint32_t *)(sec->addr + slide);
                             uint32_t *end = (uint32_t *)((char *)start + sec->size);
                             
+                            // مسح الذاكرة بالكامل وجمع كل العناوين المطابقة
                             for (uint32_t *p = start; p < end - 1; p++) {
-                                if (!ret_0 && p[0] == 0xD2800000 && p[1] == 0xD65F03C0) ret_0 = (IMP)p;
-                                if (!ret_1 && p[0] == 0xD2800020 && p[1] == 0xD65F03C0) ret_1 = (IMP)p;
-                                if (!ret_void && p[0] == 0xD65F03C0) ret_void = (IMP)p;
-                                if (ret_0 && ret_1 && ret_void) return; 
+                                // تجميع عناوين return 0
+                                if (count_0 < 300 && p[0] == 0xD2800000 && p[1] == 0xD65F03C0) {
+                                    pool_ret_0[count_0++] = (IMP)p;
+                                }
+                                // تجميع عناوين return 1
+                                if (count_1 < 300 && p[0] == 0xD2800020 && p[1] == 0xD65F03C0) {
+                                    pool_ret_1[count_1++] = (IMP)p;
+                                }
+                                // تجميع عناوين return void
+                                if (count_void < 300 && p[0] == 0xD65F03C0) {
+                                    pool_ret_void[count_void++] = (IMP)p;
+                                }
+                                
+                                // إذا امتلأت الأحواض الثلاثة، نتوقف عن البحث لتسريع اللعبة
+                                if (count_0 == 300 && count_1 == 300 && count_void == 300) return;
                             }
                         }
                         sec = (struct section_64 *)((char *)sec + sizeof(struct section_64));
@@ -146,6 +164,11 @@ namespace NativeSpoof {
             cmd = (struct load_command *)((char *)cmd + cmd->cmdsize);
         }
     }
+
+    // دوال لاختيار عنوان عشوائي من الحوض
+    static IMP GetRandomRet0() { return count_0 > 0 ? pool_ret_0[arc4random_uniform(count_0)] : NULL; }
+    static IMP GetRandomRet1() { return count_1 > 0 ? pool_ret_1[arc4random_uniform(count_1)] : NULL; }
+    static IMP GetRandomRetVoid() { return count_void > 0 ? pool_ret_void[arc4random_uniform(count_void)] : NULL; }
 }
 
 __attribute__((visibility("hidden"))) id _sys_id_0(id self, SEL _cmd, ...) { return 0; }
@@ -160,20 +183,24 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
         Method m = API::sys_class_getInstanceMethod(cls, sel);
         if (m) {
             IMP targetIMP = NULL;
-            if (retType == 0) targetIMP = NativeSpoof::ret_0;
-            else if (retType == 1) targetIMP = NativeSpoof::ret_1;
-            else if (retType == 2) targetIMP = NativeSpoof::ret_void;
+            // سحب عنوان أصلي من اللعبة بشكل عشوائي لكل مسار
+            if (retType == 0) targetIMP = NativeSpoof::GetRandomRet0();
+            else if (retType == 1) targetIMP = NativeSpoof::GetRandomRet1();
+            else if (retType == 2) targetIMP = NativeSpoof::GetRandomRetVoid();
             
+            // خطة طوارئ في حال لم يجد المحرك عناوين كافية
             if (!targetIMP) { 
                 if (retType == 0) targetIMP = (IMP)_sys_id_0;
                 else if (retType == 1) targetIMP = (IMP)_sys_bool_yes;
                 else if (retType == 2) targetIMP = (IMP)_sys_void_empty;
             }
             
+            // الربط الصامت والآمن
             API::sys_class_replaceMethod(cls, sel, targetIMP, API::sys_method_getTypeEncoding(m));
         }
     }
 }
+
 
 // =================================================================
 // [ الجزء الرابع: درع النظام، تزييف dladdr، والتلاعب الجراحي بالحزم ]
