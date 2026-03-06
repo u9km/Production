@@ -12,6 +12,9 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 
+// افتراض وجود مكتبة Dobby لعمل Inline Hooks
+// #include <dobby.h> 
+
 #ifndef P_TRACED
 #define P_TRACED 0x00000800
 #endif
@@ -20,38 +23,45 @@ struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
 // =================================================================
-// [ الجزء الأول: محرك التشفير 2026 ]
+// [ الجزء الأول: محرك التشفير المتدحرج LCG (عشوائية مطلقة) ]
 // =================================================================
 namespace AmmarShield {
-    template <unsigned int... Is> struct index_sequence {};
-    template <unsigned int N, unsigned int... Is> struct make_index_sequence : make_index_sequence<N - 1, N - 1, Is...> {};
-    template <unsigned int... Is> struct make_index_sequence<0, Is...> { typedef index_sequence<Is...> type; };
-
-    constexpr int seed_gen(int counter) {
-        return (__TIME__[7] - '0') * 1 + (__TIME__[6] - '0') * 10 +
-               (__TIME__[4] - '0') * 60 + (__TIME__[3] - '0') * 600 +
-               (__TIME__[1] - '0') * 3600 + (__TIME__[0] - '0') * 36000 + counter;
+    constexpr unsigned long long lcg(unsigned long long seed) {
+        return (seed * 6364136223846793005ULL + 1442695040888963407ULL);
     }
 
-    template <unsigned int N, int K>
-    struct Obfuscator {
+    template <size_t N, unsigned long long Seed>
+    struct AdvancedObfuscator {
         char data[N];
-        template <unsigned int... Is>
-        constexpr Obfuscator(const char* str, index_sequence<Is...>)
-            : data{ static_cast<char>((str[Is] ^ K) + (K % 10))... } {}
-
-        __attribute__((always_inline)) const char* decrypt() {
-            for (unsigned int i = 0; i < N; ++i) { data[i] = (data[i] - (K % 10)) ^ K; }
-            return data;
+        constexpr AdvancedObfuscator(const char* str) : data{0} {
+            unsigned long long current_seed = Seed;
+            for (size_t i = 0; i < N; ++i) {
+                current_seed = lcg(current_seed);
+                char key = static_cast<char>((current_seed >> 32) & 0xFF);
+                if (key == 0) key = 0xAA; 
+                data[i] = str[i] ^ key;
+            }
+        }
+        __attribute__((always_inline)) void decrypt(char* out) const {
+            unsigned long long current_seed = Seed;
+            for (size_t i = 0; i < N; ++i) {
+                current_seed = lcg(current_seed);
+                char key = static_cast<char>((current_seed >> 32) & 0xFF);
+                if (key == 0) key = 0xAA;
+                out[i] = data[i] ^ key;
+            }
         }
     };
-    template<unsigned int N, int K>
-    static const char* safe_obfuscate(const char* str) {
-        static Obfuscator<N, K> obf(str, typename make_index_sequence<N>::type());
-        return obf.decrypt();
-    }
 }
-#define OBFUSCATE(str) (AmmarShield::safe_obfuscate<sizeof(str), AmmarShield::seed_gen(__COUNTER__)>(str))
+#define OBFUSCATE(str) \
+    ([]() -> char* { \
+        constexpr unsigned long long initial_seed = ((__TIME__[7] ^ __LINE__) * 123456789ULL) ^ 0xDEADBEEFCAFEBABE; \
+        constexpr AmmarShield::AdvancedObfuscator<sizeof(str), initial_seed> obf(str); \
+        static char decrypted[sizeof(str)]; \
+        static bool init = false; \
+        if (!init) { obf.decrypt(decrypted); init = true; } \
+        return decrypted; \
+    }())
 
 // =================================================================
 // [ الجزء الثاني: API الديناميكية (إخفاء دوال النظام) ]
@@ -90,8 +100,16 @@ namespace API {
     }
 }
 
+static inline id DynStr(const char* str) {
+    Class nsstr = API::sys_objc_getClass(OBFUSCATE("NSString"));
+    SEL alloc_sel = API::sys_sel_registerName(OBFUSCATE("alloc"));
+    SEL init_sel = API::sys_sel_registerName(OBFUSCATE("initWithUTF8String:"));
+    id allocated = ((id(*)(id, SEL))objc_msgSend)((id)nsstr, alloc_sel);
+    return ((id(*)(id, SEL, const char*))objc_msgSend)(allocated, init_sel, str);
+}
+
 // =================================================================
-// [ الجزء الثالث: محرك استنساخ الذاكرة الأصلية ]
+// [ الجزء الثالث: استنساخ الذاكرة الأصلية (تجاوز باند فحص الـ IMP) ]
 // =================================================================
 namespace NativeSpoof {
     static IMP ret_0 = NULL;
@@ -146,7 +164,7 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
             else if (retType == 1) targetIMP = NativeSpoof::ret_1;
             else if (retType == 2) targetIMP = NativeSpoof::ret_void;
             
-            if (!targetIMP) { // خطة طوارئ في حال فشل البحث
+            if (!targetIMP) { 
                 if (retType == 0) targetIMP = (IMP)_sys_id_0;
                 else if (retType == 1) targetIMP = (IMP)_sys_bool_yes;
                 else if (retType == 2) targetIMP = (IMP)_sys_void_empty;
@@ -158,9 +176,10 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
 }
 
 // =================================================================
-// [ الجزء الرابع: درع النظام والشبكة ]
+// [ الجزء الرابع: درع النظام، تزييف dladdr، والتلاعب الجراحي بالحزم ]
 // =================================================================
 
+// 1. تزييف اسم الدايلب
 static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
 __attribute__((visibility("hidden"))) const char* my_dyld_get_image_name(uint32_t image_index) {
     const char* name = orig_dyld_get_image_name(image_index);
@@ -168,20 +187,27 @@ __attribute__((visibility("hidden"))) const char* my_dyld_get_image_name(uint32_
     return name;
 }
 
-__attribute__((visibility("hidden"))) void* my_AnoSDKGetReportData(int* out_size) { if (out_size) *out_size = 0; return NULL; }
-__attribute__((visibility("hidden"))) int my_AnoSDKInit(void* a1, void* a2, void* a3) { return 1; } 
-__attribute__((visibility("hidden"))) void my_AnoSDKOnRecvData(void* d, int s) { return; }
-
-static ssize_t (*orig_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
-__attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
-    if (buf && len > 0) {
-        const char* rpt = OBFUSCATE("Report");
-        const char* pic = OBFUSCATE("pic_data");
-        if (API::sys_memmem(buf, len, rpt, API::sys_strlen(rpt)) || API::sys_memmem(buf, len, pic, API::sys_strlen(pic))) return len;
+// 2. تزييف dladdr (لمنع كشف الهوكات الخارجية)
+static int (*orig_dladdr)(const void *addr, Dl_info *info);
+__attribute__((visibility("hidden"))) int my_dladdr(const void *addr, Dl_info *info) {
+    int ret = orig_dladdr(addr, info);
+    if (ret != 0 && info && info->dli_fname) {
+        if (API::sys_strstr(info->dli_fname, OBFUSCATE("Ammar")) || API::sys_strstr(info->dli_fname, OBFUSCATE("AmarShield"))) {
+            info->dli_fname = OBFUSCATE("/usr/lib/system/libsystem_c.dylib");
+            info->dli_sname = OBFUSCATE("malloc"); 
+        }
     }
-    return orig_sendto(sockfd, buf, len, flags, dest_addr, addrlen);
+    return ret;
 }
 
+// 3. إخفاء الجيلبريك
+static int (*orig_access)(const char *p, int m);
+__attribute__((visibility("hidden"))) int my_access(const char *p, int m) {
+    if (p && (API::sys_strstr(p, OBFUSCATE("Cydia")) || API::sys_strstr(p, OBFUSCATE("frida")))) return -1;
+    return orig_access(p, m);
+}
+
+// 4. إخفاء بيئة التصحيح
 static int (*orig_sysctl)(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2);
 __attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2) {
     int r = orig_sysctl(n, nl, op, ol, np, nl2);
@@ -191,19 +217,84 @@ __attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, 
     return r;
 }
 
-static void* (*orig_dlsym)(void *handle, const char *symbol);
-__attribute__((visibility("hidden"))) void* my_dlsym(void *handle, const char *symbol) {
-    if (symbol) {
-        if (API::sys_strcmp(symbol, OBFUSCATE("AnoSDKInit")) == 0) return (void*)my_AnoSDKInit;
-        if (API::sys_strcmp(symbol, OBFUSCATE("AnoSDKGetReportData")) == 0) return (void*)my_AnoSDKGetReportData;
-        if (API::sys_strcmp(symbol, OBFUSCATE("sysctl")) == 0) return (void*)my_sysctl;
-        if (API::sys_strcmp(symbol, OBFUSCATE("sendto")) == 0) return (void*)my_sendto;
+// 5. التلاعب الجراحي بحزم الشبكة (إصلاح انقطاع الـ Heartbeat)
+static ssize_t (*orig_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
+__attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+    if (buf && len > 0) {
+        const char* rpt = OBFUSCATE("Report");
+        const char* pic = OBFUSCATE("pic_data");
+        void* rpt_ptr = API::sys_memmem(buf, len, rpt, API::sys_strlen(rpt));
+        void* pic_ptr = API::sys_memmem(buf, len, pic, API::sys_strlen(pic));
+        
+        if (rpt_ptr || pic_ptr) {
+            char* safe_buf = (char*)malloc(len);
+            memcpy(safe_buf, buf, len);
+            
+            if (rpt_ptr) {
+                size_t offset = (char*)rpt_ptr - (char*)buf;
+                memset(safe_buf + offset, 0x00, API::sys_strlen(rpt)); 
+            }
+            if (pic_ptr) {
+                size_t offset = (char*)pic_ptr - (char*)buf;
+                memset(safe_buf + offset, 0x00, API::sys_strlen(pic));
+            }
+            
+            ssize_t ret = orig_sendto(sockfd, safe_buf, len, flags, dest_addr, addrlen);
+            free(safe_buf);
+            return ret;
+        }
     }
-    return orig_dlsym(handle, symbol);
+    return orig_sendto(sockfd, buf, len, flags, dest_addr, addrlen);
+}
+
+// 6. التمرير الشفاف لـ AnoSDK (Passthrough Bypass)
+static int (*orig_AnoSDKInit)(void* a1, void* a2, void* a3);
+__attribute__((visibility("hidden"))) int my_AnoSDKInit(void* a1, void* a2, void* a3) { 
+    if (orig_AnoSDKInit) {
+        return orig_AnoSDKInit(a1, a2, a3); // السيرفر سيتلقى الرد ولن يشك، بينما sendto ستقطع التقارير
+    }
+    return 1; 
+}
+__attribute__((visibility("hidden"))) void* my_AnoSDKGetReportData(int* out_size) { if (out_size) *out_size = 0; return NULL; }
+__attribute__((visibility("hidden"))) void my_AnoSDKOnRecvData(void* d, int s) { return; }
+
+
+__attribute__((visibility("hidden")))
+static void showAmmarVIPMessage() {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        Class uiAppCls = API::sys_objc_getClass(OBFUSCATE("UIApplication"));
+        SEL sharedAppSel = API::sys_sel_registerName(OBFUSCATE("sharedApplication"));
+        id app = ((id(*)(id, SEL))objc_msgSend)((id)uiAppCls, sharedAppSel);
+
+        SEL keyWinSel = API::sys_sel_registerName(OBFUSCATE("keyWindow"));
+        id window = ((id(*)(id, SEL))objc_msgSend)(app, keyWinSel);
+
+        SEL rootVCSel = API::sys_sel_registerName(OBFUSCATE("rootViewController"));
+        id rootVC = ((id(*)(id, SEL))objc_msgSend)(window, rootVCSel);
+
+        if (rootVC) {
+            Class alertCtrlCls = API::sys_objc_getClass(OBFUSCATE("UIAlertController"));
+            SEL alertCtrlSel = API::sys_sel_registerName(OBFUSCATE("alertControllerWithTitle:message:preferredStyle:"));
+            id title = DynStr(OBFUSCATE("AMAR VIP 2026"));
+            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الظل العميق 😈\n(NativeSpoof + Passthrough)"));
+            id alert = ((id(*)(id, SEL, id, id, NSInteger))objc_msgSend)((id)alertCtrlCls, alertCtrlSel, title, msg, 1);
+
+            Class alertActCls = API::sys_objc_getClass(OBFUSCATE("UIAlertAction"));
+            SEL actSel = API::sys_sel_registerName(OBFUSCATE("actionWithTitle:style:handler:"));
+            id btn = DynStr(OBFUSCATE("بدء الجلد المظلم"));
+            id action = ((id(*)(id, SEL, id, NSInteger, id))objc_msgSend)((id)alertActCls, actSel, btn, 0, nil);
+
+            SEL addActSel = API::sys_sel_registerName(OBFUSCATE("addAction:"));
+            ((void(*)(id, SEL, id))objc_msgSend)(alert, addActSel, action);
+
+            SEL presentSel = API::sys_sel_registerName(OBFUSCATE("presentViewController:animated:completion:"));
+            ((void(*)(id, SEL, id, BOOL, id))objc_msgSend)(rootVC, presentSel, alert, YES, nil);
+        }
+    });
 }
 
 // =================================================================
-// [ الجزء الخامس: محرك الإقلاع السيادي الكامل لـ 159 مسار ]
+// [ الجزء الخامس: محرك الإقلاع السيادي الكامل ]
 // =================================================================
 
 __attribute__((constructor))
@@ -212,16 +303,27 @@ static void Ignite_Ammar_Zeus_2026() {
     API::Init();
     NativeSpoof::ScanGameMemory();
 
+    // 1. هوكات النظام (بدون dlsym المكشوفة)
     struct rebinding r[] = { 
-        {(const char*)OBFUSCATE("_dyld_get_image_name"), (void*)my_dyld_get_image_name, (void**)&orig_dyld_get_image_name},
         {(const char*)OBFUSCATE("sendto"), (void*)my_sendto, (void**)&orig_sendto},
         {(const char*)OBFUSCATE("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl},
-        {(const char*)OBFUSCATE("dlsym"), (void*)my_dlsym, (void**)&orig_dlsym}
+        {(const char*)OBFUSCATE("access"), (void*)my_access, (void**)&orig_access},
+        {(const char*)OBFUSCATE("dladdr"), (void*)my_dladdr, (void**)&orig_dladdr},
+        {(const char*)OBFUSCATE("_dyld_get_image_name"), (void*)my_dyld_get_image_name, (void**)&orig_dyld_get_image_name}
     };
-    rebind_symbols(r, 4);
+    rebind_symbols(r, 5);
+
+    // 2. استخدام Dobby لعمل Inline Hook لـ AnoSDK (يحتاج Dobby مدمج)
+    /* void* sdkInit_Addr = dlsym(RTLD_DEFAULT, OBFUSCATE("AnoSDKInit"));
+    if (sdkInit_Addr) DobbyHook(sdkInit_Addr, (void*)my_AnoSDKInit, (void**)&orig_AnoSDKInit);
+    void* sdkRep_Addr = dlsym(RTLD_DEFAULT, OBFUSCATE("AnoSDKGetReportData"));
+    if (sdkRep_Addr) DobbyHook(sdkRep_Addr, (void*)my_AnoSDKGetReportData, NULL);
+    */
+
+    showAmmarVIPMessage();
 
     // =================================================================
-    // دوال الحماية الأساسية
+    // دوال الحماية الأساسية والشبكة والإعلانات
     // =================================================================
     _sys_bind_native(OBFUSCATE("serviceCommunication"), OBFUSCATE("getValueForKeypath"), 0);
     _sys_bind_native(OBFUSCATE("WeaponProcessor"), OBFUSCATE("CalculateDamage"), 0);
@@ -230,9 +332,6 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("SecurityChecker"), OBFUSCATE("IsFileSystemModified"), 0);
     _sys_bind_native(OBFUSCATE("BulletSimulator"), OBFUSCATE("CheckWallCollision"), 0);
 
-    // =================================================================
-    // دوال GSDK و Ping والشبكة والإعلانات
-    // =================================================================
     _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionOnDemand"), 1);
     _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionRequired"), 1);
     _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("GetAudioDeviceConnectState"), 0);
