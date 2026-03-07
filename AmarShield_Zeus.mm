@@ -5,26 +5,25 @@
 #include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <mach/mach.h>
+#include <mach/thread_status.h>
+#include <mach/thread_act.h>
 #include <dlfcn.h>
 #include <math.h>
-#include <stdarg.h>
 #include <string.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+
+// [ التقنية الأولى: Dobby للربط المباشر في الذاكرة الحية ]
+#include <dobby.h> 
 
 #ifndef P_TRACED
 #define P_TRACED 0x00000800
 #endif
 
-// استخدام الهيكل الجديد المموه
-struct ios_mem_task { const char *name; void *replacement; void **replaced; };
-extern "C" int ios_memory_sync(struct ios_mem_task tasks[], size_t tasks_nel);
-
 // =================================================================
-// [ الجزء الأول: محرك طحن النصوص C++14/17 (التمويه الجيني) ]
+// [ محرك طحن النصوص (Zero-Leak Shredder) ]
 // =================================================================
 #include <utility>
-
 namespace CoreMemUtils { 
     template <size_t N, char K, size_t... Is>
     constexpr auto EncryptString(const char (&str)[N], std::index_sequence<Is...>) {
@@ -32,7 +31,6 @@ namespace CoreMemUtils {
         return result;
     }
 }
-
 #define OBFUSCATE(str) \
     ([]() -> char* { \
         constexpr char key = (__TIME__[7] ^ __LINE__) % 127 + 1; \
@@ -40,48 +38,40 @@ namespace CoreMemUtils {
         static char decrypted[sizeof(str)]; \
         static bool init = false; \
         if (!init) { \
-            for (size_t i = 0; i < sizeof(str); ++i) { \
-                decrypted[i] = obfuscated.data[i] ^ key; \
-            } \
+            for (size_t i = 0; i < sizeof(str); ++i) { decrypted[i] = obfuscated.data[i] ^ key; } \
             init = true; \
         } \
         return decrypted; \
     }())
 
 // =================================================================
-// [ الجزء الثاني: API الديناميكية (إخفاء دوال النظام) ]
+// [ واجهة API الديناميكية المخفية ]
 // =================================================================
 namespace API {
-    typedef char* (*strstr_t)(const char*, const char*);
     typedef int (*strcmp_t)(const char*, const char*);
-    typedef void* (*memmem_t)(const void*, size_t, const void*, size_t);
-    typedef size_t (*strlen_t)(const char*);
     typedef Class (*objc_getClass_t)(const char*);
     typedef SEL (*sel_registerName_t)(const char*);
     typedef Method (*class_getInstanceMethod_t)(Class, SEL);
     typedef IMP (*class_replaceMethod_t)(Class, SEL, IMP, const char*);
     typedef const char* (*method_getTypeEncoding_t)(Method);
+    typedef IMP (*method_getImplementation_t)(Method);
 
-    static strstr_t sys_strstr = nullptr;
     static strcmp_t sys_strcmp = nullptr;
-    static memmem_t sys_memmem = nullptr;
-    static strlen_t sys_strlen = nullptr;
     static objc_getClass_t sys_objc_getClass = nullptr;
     static sel_registerName_t sys_sel_registerName = nullptr;
     static class_getInstanceMethod_t sys_class_getInstanceMethod = nullptr;
     static class_replaceMethod_t sys_class_replaceMethod = nullptr;
     static method_getTypeEncoding_t sys_method_getTypeEncoding = nullptr;
+    static method_getImplementation_t sys_method_getImplementation = nullptr;
 
     static void Init() {
-        sys_strstr = (strstr_t)dlsym(RTLD_DEFAULT, OBFUSCATE("strstr"));
         sys_strcmp = (strcmp_t)dlsym(RTLD_DEFAULT, OBFUSCATE("strcmp"));
-        sys_memmem = (memmem_t)dlsym(RTLD_DEFAULT, OBFUSCATE("memmem"));
-        sys_strlen = (strlen_t)dlsym(RTLD_DEFAULT, OBFUSCATE("strlen"));
         sys_objc_getClass = (objc_getClass_t)dlsym(RTLD_DEFAULT, OBFUSCATE("objc_getClass"));
         sys_sel_registerName = (sel_registerName_t)dlsym(RTLD_DEFAULT, OBFUSCATE("sel_registerName"));
         sys_class_getInstanceMethod = (class_getInstanceMethod_t)dlsym(RTLD_DEFAULT, OBFUSCATE("class_getInstanceMethod"));
         sys_class_replaceMethod = (class_replaceMethod_t)dlsym(RTLD_DEFAULT, OBFUSCATE("class_replaceMethod"));
         sys_method_getTypeEncoding = (method_getTypeEncoding_t)dlsym(RTLD_DEFAULT, OBFUSCATE("method_getTypeEncoding"));
+        sys_method_getImplementation = (method_getImplementation_t)dlsym(RTLD_DEFAULT, OBFUSCATE("method_getImplementation"));
     }
 }
 
@@ -94,7 +84,7 @@ static inline id DynStr(const char* str) {
 }
 
 // =================================================================
-// [ الجزء الثالث: حوض الاستنساخ العشوائي (300 عنوان) لمنع فحص الـ IMP ]
+// [ حوض الاستنساخ (NativeSpoof) لتمويه هوكات اللعبة ]
 // =================================================================
 namespace NativeSpoof {
     static IMP pool_ret_0[300];
@@ -131,11 +121,22 @@ namespace NativeSpoof {
             cmd = (struct load_command *)((char *)cmd + cmd->cmdsize);
         }
     }
+    
     static IMP GetRandomRet0() { return count_0 > 0 ? pool_ret_0[arc4random_uniform(count_0)] : NULL; }
     static IMP GetRandomRet1() { return count_1 > 0 ? pool_ret_1[arc4random_uniform(count_1)] : NULL; }
     static IMP GetRandomRetVoid() { return count_void > 0 ? pool_ret_void[arc4random_uniform(count_void)] : NULL; }
+
+    static bool IsOurSpoofedIMP(IMP imp) {
+        for(int i=0; i<count_0; i++) if(pool_ret_0[i] == imp) return true;
+        for(int i=0; i<count_1; i++) if(pool_ret_1[i] == imp) return true;
+        for(int i=0; i<count_void; i++) if(pool_ret_void[i] == imp) return true;
+        return false;
+    }
 }
 
+// =================================================================
+// [ التقنية الثانية: VMT / Obj-C Phantom Swizzling ]
+// =================================================================
 __attribute__((visibility("hidden"))) id _sys_id_0(id self, SEL _cmd, ...) { return 0; }
 __attribute__((visibility("hidden"))) BOOL _sys_bool_yes(id self, SEL _cmd, ...) { return YES; }
 __attribute__((visibility("hidden"))) void _sys_void_empty(id self, SEL _cmd, ...) { }
@@ -163,31 +164,43 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
 }
 
 // =================================================================
-// [ الجزء الرابع: درع النظام والتلاعب الجراحي بالحزم ]
+// [ التقنية الثالثة: محرك HWBP (Hardware Breakpoints) - Concept ]
 // =================================================================
-
-static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
-__attribute__((visibility("hidden"))) const char* my_dyld_get_image_name(uint32_t image_index) {
-    const char* name = orig_dyld_get_image_name(image_index);
-    if (name && (API::sys_strstr(name, OBFUSCATE("Ammar")) || API::sys_strstr(name, OBFUSCATE("AmarShield")))) return OBFUSCATE("/usr/lib/system/libsystem_kernel.dylib");
-    return name;
-}
-
-static int (*orig_dladdr)(const void *addr, Dl_info *info);
-__attribute__((visibility("hidden"))) int my_dladdr(const void *addr, Dl_info *info) {
-    int ret = orig_dladdr(addr, info);
-    if (ret != 0 && info && info->dli_fname) {
-        if (API::sys_strstr(info->dli_fname, OBFUSCATE("Ammar")) || API::sys_strstr(info->dli_fname, OBFUSCATE("AmarShield"))) {
-            info->dli_fname = OBFUSCATE("/usr/lib/system/libsystem_c.dylib");
-            info->dli_sname = OBFUSCATE("malloc"); 
+namespace HWBP_Engine {
+    static void SetupHardwareBreakpoints() {
+        thread_act_array_t threads;
+        mach_msg_type_number_t thread_count;
+        if (task_threads(mach_task_self(), &threads, &thread_count) == KERN_SUCCESS) {
+            for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
+                arm_debug_state64_t debug_state;
+                mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+                memset(&debug_state, 0, sizeof(debug_state)); 
+                thread_set_state(threads[i], ARM_DEBUG_STATE64, (thread_state_t)&debug_state, count);
+                mach_port_deallocate(mach_task_self(), threads[i]);
+            }
+            vm_deallocate(mach_task_self(), (vm_address_t)threads, thread_count * sizeof(thread_act_t));
         }
     }
-    return ret;
 }
 
+// =================================================================
+// [ الانقضاض المباشر (Dobby Inline Hooks) والتضليل الشبحي ]
+// =================================================================
+
+// 1. تضليل فاحص الذاكرة الخاص بـ آبل/الحماية (Phantom Logic)
+static IMP (*orig_method_getImplementation)(Method m);
+__attribute__((visibility("hidden"))) IMP my_method_getImplementation(Method m) {
+    IMP real_imp = orig_method_getImplementation(m);
+    if (NativeSpoof::IsOurSpoofedIMP(real_imp)) {
+        return NativeSpoof::GetRandomRetVoid(); // كذب على الحماية وأعطها عنواناً أصلياً
+    }
+    return real_imp;
+}
+
+// 2. إخفاء الجيلبريك والتصحيح
 static int (*orig_access)(const char *p, int m);
 __attribute__((visibility("hidden"))) int my_access(const char *p, int m) {
-    if (p && (API::sys_strstr(p, OBFUSCATE("Cydia")) || API::sys_strstr(p, OBFUSCATE("frida")))) return -1;
+    if (p && (strstr(p, OBFUSCATE("Cydia")) || strstr(p, OBFUSCATE("frida")))) return -1;
     return orig_access(p, m);
 }
 
@@ -200,33 +213,9 @@ __attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, 
     return r;
 }
 
-static ssize_t (*orig_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
-__attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
-    if (buf && len > 0) {
-        const char* rpt = OBFUSCATE("Report");
-        const char* pic = OBFUSCATE("pic_data");
-        void* rpt_ptr = API::sys_memmem(buf, len, rpt, API::sys_strlen(rpt));
-        void* pic_ptr = API::sys_memmem(buf, len, pic, API::sys_strlen(pic));
-        
-        if (rpt_ptr || pic_ptr) {
-            char* safe_buf = (char*)malloc(len);
-            memcpy(safe_buf, buf, len);
-            if (rpt_ptr) {
-                size_t offset = (char*)rpt_ptr - (char*)buf;
-                memset(safe_buf + offset, 0x00, API::sys_strlen(rpt)); 
-            }
-            if (pic_ptr) {
-                size_t offset = (char*)pic_ptr - (char*)buf;
-                memset(safe_buf + offset, 0x00, API::sys_strlen(pic));
-            }
-            ssize_t ret = orig_sendto(sockfd, safe_buf, len, flags, dest_addr, addrlen);
-            free(safe_buf);
-            return ret;
-        }
-    }
-    return orig_sendto(sockfd, buf, len, flags, dest_addr, addrlen);
-}
-
+// =================================================================
+// [ واجهة المستخدم: رسالة الثالوث المحرم (Trinity Protocol) ]
+// =================================================================
 __attribute__((visibility("hidden")))
 static void showAmmarVIPMessage() {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -238,18 +227,18 @@ static void showAmmarVIPMessage() {
         id window = ((id(*)(id, SEL))objc_msgSend)(app, keyWinSel);
 
         SEL rootVCSel = API::sys_sel_registerName(OBFUSCATE("rootViewController"));
-        id rootVC = ((id(*)(id, SEL))objc_msgSend)(window, rootVCSel);
+        id rootVC = ((id(*)(id, SEL))window, rootVCSel);
 
         if (rootVC) {
             Class alertCtrlCls = API::sys_objc_getClass(OBFUSCATE("UIAlertController"));
             SEL alertCtrlSel = API::sys_sel_registerName(OBFUSCATE("alertControllerWithTitle:message:preferredStyle:"));
-            id title = DynStr(OBFUSCATE("AMAR VIP 2026"));
-            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الظل العميق 😈\n(Zero-Trace Mode)"));
+            id title = DynStr(OBFUSCATE("⚡ 𝗔𝗠𝗠𝗔𝗥 𝗭𝗘𝗨𝗦 𝟮𝟬𝟮𝟲 ⚡"));
+            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الثالوث المحرم بنجاح 💀\n\n[✓] Dobby Inline Injector\n[✓] Phantom VMT Swizzle\n[✓] HWBP Evasion Active\n\n🛡️ Zero-Fishhook Engine 🛡️"));
             id alert = ((id(*)(id, SEL, id, id, NSInteger))objc_msgSend)((id)alertCtrlCls, alertCtrlSel, title, msg, 1);
 
             Class alertActCls = API::sys_objc_getClass(OBFUSCATE("UIAlertAction"));
             SEL actSel = API::sys_sel_registerName(OBFUSCATE("actionWithTitle:style:handler:"));
-            id btn = DynStr(OBFUSCATE("بدء الجلد المظلم"));
+            id btn = DynStr(OBFUSCATE("🔥 إطلاق العنان 🔥"));
             id action = ((id(*)(id, SEL, id, NSInteger, id))objc_msgSend)((id)alertActCls, actSel, btn, 0, nil);
 
             SEL addActSel = API::sys_sel_registerName(OBFUSCATE("addAction:"));
@@ -262,7 +251,7 @@ static void showAmmarVIPMessage() {
 }
 
 // =================================================================
-// [ الجزء الخامس: محرك الإقلاع السيادي الكامل ]
+// [ محرك الإقلاع السيادي الكامل وكتيبة الـ 159 مساراً ]
 // =================================================================
 
 __attribute__((constructor))
@@ -270,21 +259,24 @@ static void Ignite_Ammar_Zeus_2026() {
     
     API::Init();
     NativeSpoof::ScanGameMemory();
+    HWBP_Engine::SetupHardwareBreakpoints(); // تشويش مسجلات العتاد
 
-    // استخدام الفيش هوك المموه ios_memory_sync
-    struct ios_mem_task r[] = { 
-        {(const char*)OBFUSCATE("sendto"), (void*)my_sendto, (void**)&orig_sendto},
-        {(const char*)OBFUSCATE("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl},
-        {(const char*)OBFUSCATE("access"), (void*)my_access, (void**)&orig_access},
-        {(const char*)OBFUSCATE("dladdr"), (void*)my_dladdr, (void**)&orig_dladdr},
-        {(const char*)OBFUSCATE("_dyld_get_image_name"), (void*)my_dyld_get_image_name, (void**)&orig_dyld_get_image_name}
-    };
-    ios_memory_sync(r, 5);
+    // -------------------------------------------------------------
+    // استخدام Dobby لعمل Inline Hooks للدوال الحساسة
+    // -------------------------------------------------------------
+    void* sysctl_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("sysctl"));
+    if (sysctl_ptr) DobbyHook(sysctl_ptr, (void*)my_sysctl, (void**)&orig_sysctl);
+
+    void* access_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("access"));
+    if (access_ptr) DobbyHook(access_ptr, (void*)my_access, (void**)&orig_access);
+
+    void* method_getImpl_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("method_getImplementation"));
+    if (method_getImpl_ptr) DobbyHook(method_getImpl_ptr, (void*)my_method_getImplementation, (void**)&orig_method_getImplementation);
 
     showAmmarVIPMessage();
 
     // =================================================================
-    // دوال الحماية الأساسية والشبكة والإعلانات
+    // دوال الحماية الأساسية والشبكة والأسلحة
     // =================================================================
     _sys_bind_native(OBFUSCATE("serviceCommunication"), OBFUSCATE("getValueForKeypath"), 0);
     _sys_bind_native(OBFUSCATE("WeaponProcessor"), OBFUSCATE("CalculateDamage"), 0);
@@ -293,22 +285,9 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("SecurityChecker"), OBFUSCATE("IsFileSystemModified"), 0);
     _sys_bind_native(OBFUSCATE("BulletSimulator"), OBFUSCATE("CheckWallCollision"), 0);
 
-    _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionOnDemand"), 1);
-    _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionRequired"), 1);
-    _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("GetAudioDeviceConnectState"), 0);
-    _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("UpdateDeviceState_"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessagingRmqManager"), OBFUSCATE("openDatabase"), 0);
-    _sys_bind_native(OBFUSCATE("GADAdNetworkResponseInfo"), OBFUSCATE("adUnitMapping"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd_ad"), OBFUSCATE("didFailToPresentFullScreenContentWithError_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidDismissFullScreenContent_"), 1);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordClick_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordImpression_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adWillDismissFullScreenContent_"), 1);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adWillPresentFullScreenContent_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd_canPresentFromRootViewController"), OBFUSCATE("error_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("responseInfo"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("setPaidEventHandler_"), 0);
-    _sys_bind_native(OBFUSCATE("GADMobileAds"), OBFUSCATE("initializationStatus"), 0);
+    // =================================================================
+    // دوال GSDK (Ping, Network, Memory, CPU)
+    // =================================================================
     _sys_bind_native(OBFUSCATE("GSDKCPU"), OBFUSCATE("getSystemCPUCircle"), 0);
     _sys_bind_native(OBFUSCATE("GSDKDetectPort_isConnection"), OBFUSCATE("Port_"), 0);
     _sys_bind_native(OBFUSCATE("GSDKHttpDnsResolver"), OBFUSCATE("dealloc"), 0);
@@ -343,7 +322,29 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("GSDKRealTimeDetect_updDelayDetect"), OBFUSCATE("Port_"), 0);
     _sys_bind_native(OBFUSCATE("GSDKUdpDetect_isUDPConnect"), OBFUSCATE("Port_"), 0);
     _sys_bind_native(OBFUSCATE("GSDKWIFI"), OBFUSCATE("ping_"), 0);
-    _sys_bind_native(OBFUSCATE("GTMSessionFetcher_setSystemCompletionHandler"), OBFUSCATE("forSessionIdentifier_"), 0);
+
+    // =================================================================
+    // دوال المراقبة والأداء (APM)
+    // =================================================================
+    _sys_bind_native(OBFUSCATE("APMMonitor"), OBFUSCATE("handleEvent:"), 0);
+    _sys_bind_native(OBFUSCATE("APMMonitor"), OBFUSCATE("startMonitoring:"), 0);
+    _sys_bind_native(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getBatteryState"), 0);
+    _sys_bind_native(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getThermalState"), 0);
+    _sys_bind_native(OBFUSCATE("APMCollector"), OBFUSCATE("collectMetrics:"), 0);
+    _sys_bind_native(OBFUSCATE("APMCollector"), OBFUSCATE("reportNow"), 0);
+    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLoadLevel:"), 0);
+    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLevelFin"), 0);
+    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStepEvent:"), 0);
+    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStreamEvent:"), 0);
+
+    // =================================================================
+    // دوال المايكروفون، الصوتيات، والإشعارات
+    // =================================================================
+    _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionOnDemand"), 1);
+    _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionRequired"), 1);
+    _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("GetAudioDeviceConnectState"), 0);
+    _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("UpdateDeviceState_"), 0);
+    _sys_bind_native(OBFUSCATE("FIRMessagingRmqManager"), OBFUSCATE("openDatabase"), 0);
     _sys_bind_native(OBFUSCATE("GVGCloudVoice"), OBFUSCATE("openMic"), 0);
     _sys_bind_native(OBFUSCATE("GVGCloudVoice"), OBFUSCATE("openSpeaker"), 0);
     _sys_bind_native(OBFUSCATE("GVGCloudVoice_setAppInfo_withKey"), OBFUSCATE("andOpenID_"), 0);
@@ -353,6 +354,10 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("GetMicState"), 0);
     _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("GetSpeakerState"), 0);
     _sys_bind_native(OBFUSCATE("GVoiceMuteSwitch"), OBFUSCATE("detectMuteSwitch"), 0);
+
+    // =================================================================
+    // دوال IMSDK و Tencent و Ping
+    // =================================================================
     _sys_bind_native(OBFUSCATE("IMSDKCustomWebView"), OBFUSCATE("dealloc"), 0);
     _sys_bind_native(OBFUSCATE("IMSDKNoticeIMSDKManager_getImageCache_imagePath_imageHash_queue"), OBFUSCATE("completeHandle_"), 0);
     _sys_bind_native(OBFUSCATE("IMSDKNoticeIMSDKManager"), OBFUSCATE("imsdkCoreKitNoticeImageFileHash_"), 0);
@@ -378,22 +383,9 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("TcApiTool"), OBFUSCATE("openUniversallinkIfNeed_"), 0);
 
     // =================================================================
-    // دوال APM
+    // دوال GCloud Voice Engine الشاملة
     // =================================================================
-    _sys_bind_native(OBFUSCATE("APMMonitor"), OBFUSCATE("handleEvent:"), 0);
-    _sys_bind_native(OBFUSCATE("APMMonitor"), OBFUSCATE("startMonitoring:"), 0);
-    _sys_bind_native(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getBatteryState"), 0);
-    _sys_bind_native(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getThermalState"), 0);
-    _sys_bind_native(OBFUSCATE("APMCollector"), OBFUSCATE("collectMetrics:"), 0);
-    _sys_bind_native(OBFUSCATE("APMCollector"), OBFUSCATE("reportNow"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLoadLevel:"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLevelFin"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStepEvent:"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStreamEvent:"), 0);
-
-    // =================================================================
-    // دوال GCloud Voice
-    // =================================================================
+    _sys_bind_native(OBFUSCATE("GTMSessionFetcher_setSystemCompletionHandler"), OBFUSCATE("forSessionIdentifier_"), 0);
     _sys_bind_native(OBFUSCATE("GCloudCoreRemoteConfig"), OBFUSCATE("updateConfig:"), 0);
     _sys_bind_native(OBFUSCATE("GCloudCoreRemoteConfig"), OBFUSCATE("getConfig:"), 0);
     _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartTve"), 0);
@@ -467,7 +459,7 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetBGMPlayTime:"), 0);
 
     // =================================================================
-    // دوال Facebook Ads, Firebase, Tencent
+    // دوال Facebook Ads و Firebase
     // =================================================================
     _sys_bind_native(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("checkViewability:"), 0);
     _sys_bind_native(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("stopMonitoring"), 0);
@@ -481,6 +473,25 @@ static void Ignite_Ammar_Zeus_2026() {
     _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("unsubscribeFromTopic:completion:"), 0);
     _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("setAPNSToken:withUserInfo:"), 0);
     _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("APNSToken"), 0);
+    
+    // =================================================================
+    // دوال الإعلانات GADAppOpenAd
+    // =================================================================
+    _sys_bind_native(OBFUSCATE("GADAdNetworkResponseInfo"), OBFUSCATE("adUnitMapping"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd_ad"), OBFUSCATE("didFailToPresentFullScreenContentWithError_"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidDismissFullScreenContent_"), 1);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordClick_"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordImpression_"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adWillDismissFullScreenContent_"), 1);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adWillPresentFullScreenContent_"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd_canPresentFromRootViewController"), OBFUSCATE("error_"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("responseInfo"), 0);
+    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("setPaidEventHandler_"), 0);
+    _sys_bind_native(OBFUSCATE("GADMobileAds"), OBFUSCATE("initializationStatus"), 0);
+
+    // =================================================================
+    // دوال QQ API
+    // =================================================================
     _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendReq:resultBlock:"), 0);
     _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendThirdAppBindGroupReq:resultBlock:"), 0);
     _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendThirdAppUnBindGroupReq:resultBlock:"), 0);
