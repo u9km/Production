@@ -13,8 +13,12 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 
-// [ تم إصلاح الأقواس لتناسب الملف المحلي ]
-#include "dobby.h" 
+// =================================================================
+// [ الضربة القاضية: الاستدعاء الخارجي لدالة Dobby بدون الحاجة لملف الهيدر ]
+// =================================================================
+extern "C" {
+    int DobbyHook(void *address, void *replace_call, void **origin_call);
+}
 
 #ifndef P_TRACED
 #define P_TRACED 0x00000800
@@ -164,7 +168,7 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
 }
 
 // =================================================================
-// [ التقنية الثالثة: محرك HWBP (Hardware Breakpoints) - Concept ]
+// [ التقنية الثالثة: محرك HWBP (Hardware Breakpoints) ]
 // =================================================================
 namespace HWBP_Engine {
     static void SetupHardwareBreakpoints() {
@@ -187,7 +191,6 @@ namespace HWBP_Engine {
 // [ الانقضاض المباشر (Dobby Inline Hooks) والتضليل الشبحي ]
 // =================================================================
 
-// 1. تضليل فاحص الذاكرة الخاص بـ آبل/الحماية (Phantom Logic)
 static IMP (*orig_method_getImplementation)(Method m);
 __attribute__((visibility("hidden"))) IMP my_method_getImplementation(Method m) {
     IMP real_imp = orig_method_getImplementation(m);
@@ -197,7 +200,6 @@ __attribute__((visibility("hidden"))) IMP my_method_getImplementation(Method m) 
     return real_imp;
 }
 
-// 2. إخفاء الجيلبريك والتصحيح
 static int (*orig_access)(const char *p, int m);
 __attribute__((visibility("hidden"))) int my_access(const char *p, int m) {
     if (p && (strstr(p, OBFUSCATE("Cydia")) || strstr(p, OBFUSCATE("frida")))) return -1;
@@ -227,7 +229,6 @@ static void showAmmarVIPMessage() {
         id window = ((id(*)(id, SEL))objc_msgSend)(app, keyWinSel);
 
         SEL rootVCSel = API::sys_sel_registerName(OBFUSCATE("rootViewController"));
-        // [ تم إصلاح خطأ الاستدعاء هنا ]
         id rootVC = ((id(*)(id, SEL))objc_msgSend)(window, rootVCSel);
 
         if (rootVC) {
