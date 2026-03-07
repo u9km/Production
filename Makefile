@@ -1,5 +1,5 @@
 # =================================================================
-# [ إعدادات البيئة والتجميع الصارم ]
+# [ إعدادات البيئة الأساسية ]
 # =================================================================
 DEBUG = 0
 FINALPACKAGE = 1
@@ -12,16 +12,23 @@ TWEAK_NAME = AmarShield_Zeus
 AmarShield_Zeus_FILES = AmarShield_Zeus.mm
 
 # =================================================================
-# [ أعلام المترجم والرابط - إطفاء النور، ربط محلي، وتزييف الهوية ]
+# [ أعلام المترجم (Compiler Flags) - التخفي وتقليص الحجم ]
 # =================================================================
-# إضافة -I. لإخبار المترجم بالبحث عن dobby.h في نفس المجلد
-AmarShield_Zeus_CFLAGS = -fobjc-arc -fvisibility=hidden -g0 -O3 -I.
-AmarShield_Zeus_CXXFLAGS = -fobjc-arc -fvisibility=hidden -fno-rtti -fno-exceptions -g0 -O3 -std=c++14 -I.
+# -Oz : خوارزمية ضغط الحجم القصوى في Clang (تجعل الحجم مطابقاً للملفات الأصلية)
+# -fno-ident : تمنع المترجم من ترك بصمة إصدار Clang/Xcode داخل الملف
+# -fmerge-all-constants : دمج الثوابت المتشابهة لتقليل مساحة قسم __rodata
+AmarShield_Zeus_CFLAGS = -fobjc-arc -fvisibility=hidden -g0 -Oz -fno-ident -fmerge-all-constants -I.
+AmarShield_Zeus_CXXFLAGS = -fobjc-arc -fvisibility=hidden -fno-rtti -fno-exceptions -g0 -Oz -fno-ident -fmerge-all-constants -std=c++14 -I.
 
-# إضافة -L. لإخبار الرابط بالبحث عن libdobby في نفس المجلد
+# =================================================================
+# [ أعلام الرابط (Linker Flags) - الإعدام وتزييف الهوية ]
+# =================================================================
+# -Wl,-x و -Wl,-S : مسح جميع الرموز المحلية وبيانات تصحيح الأخطاء من جدول الرموز
+# -dead_strip : إزالة أي دالة أو متغير لم يتم استخدامه فعلياً في الكود
+# -install_name : حقن الهوية الأصلية لملف الصور داخل الـ Header
 AmarShield_Zeus_LDFLAGS = -Wl,-x -Wl,-S -dead_strip -L. -ldobby -Wl,-install_name,@rpath/libwebp.framework/libwebp
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 after-package::
-	@echo "💎 [AmarShield Zeus] Compiled Successfully with Local Dobby & libwebp Identity."
+	@echo "💎 [Zeus Engine] Compiled with Maximum Size Optimization & Zero-Trace Symbols."
