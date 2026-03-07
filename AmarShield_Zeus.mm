@@ -3,32 +3,19 @@
 #import <objc/message.h>
 #import <UIKit/UIKit.h>
 #include <sys/sysctl.h>
-#include <sys/socket.h>
-#include <mach/mach.h>
-#include <mach/thread_status.h>
-#include <mach/thread_act.h>
 #include <dlfcn.h>
-#include <math.h>
-#include <string.h>
 #include <vector>
 #include <random>
 #include <chrono>
 #include <mach-o/dyld.h>
-#include <mach-o/loader.h>
 
 // =================================================================
-// [ الاستدعاء الخارجي لدالة Dobby بدون الحاجة لملف الهيدر ]
+// [ نظام الربط الصامت لـ Dobby ]
 // =================================================================
-extern "C" {
-    int DobbyHook(void *address, void *replace_call, void **origin_call);
-}
-
-#ifndef P_TRACED
-#define P_TRACED 0x00000800
-#endif
+extern "C" int DobbyHook(void *address, void *replace_call, void **origin_call);
 
 // =================================================================
-// [ محرك طحن النصوص (Zero-Leak Shredder) ]
+// [ محرك التشفير الجيني للنصوص ]
 // =================================================================
 #include <utility>
 namespace CoreMemUtils { 
@@ -52,81 +39,23 @@ namespace CoreMemUtils {
     }())
 
 // =================================================================
-// [ محرك السلوك البشري (Telemetry ML Evasion Engine) ]
+// [ محرك السلوك البشري الإحصائي (Telemetry ML Evasion) ]
 // =================================================================
 struct Vector2D { float x, y; };
-
 class AmmarTelemetrySpoofer {
 private:
     std::mt19937 rng;
-
-    float GenerateGaussianNoise(float mean, float stddev) {
-        std::normal_distribution<float> dist(mean, stddev);
-        return dist(rng);
-    }
-
-    float CalculateFittsTime(Vector2D start, Vector2D target, float target_width) {
-        float distance = std::hypot(target.x - start.x, target.y - start.y);
-        float a = 0.1f; 
-        float b = 0.2f; 
-        return a + b * std::log2(1.0f + (distance / target_width));
-    }
-
-    Vector2D CubicBezier(Vector2D p0, Vector2D p1, Vector2D p2, Vector2D p3, float t) {
-        float u = 1.0f - t;
-        float tt = t * t;
-        float uu = u * u;
-        float uuu = uu * u;
-        float ttt = tt * t;
-        Vector2D p;
-        p.x = uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x;
-        p.y = uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y;
-        return p;
-    }
-
 public:
-    AmmarTelemetrySpoofer() {
-        rng.seed(std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    }
-
-    std::vector<Vector2D> GenerateHumanizedPath(Vector2D current_pos, Vector2D target_pos, float target_width) {
-        std::vector<Vector2D> human_path;
-        float human_time_seconds = CalculateFittsTime(current_pos, target_pos, target_width);
-        int total_steps = static_cast<int>(human_time_seconds * 60.0f); 
-        if (total_steps < 5) total_steps = 5;
-
-        Vector2D control1 = {
-            current_pos.x + (target_pos.x - current_pos.x) * 0.3f + GenerateGaussianNoise(0, 15.0f),
-            current_pos.y + (target_pos.y - current_pos.y) * 0.3f + GenerateGaussianNoise(0, 15.0f)
-        };
-        Vector2D control2 = {
-            current_pos.x + (target_pos.x - current_pos.x) * 0.7f + GenerateGaussianNoise(0, 10.0f),
-            current_pos.y + (target_pos.y - current_pos.y) * 0.7f + GenerateGaussianNoise(0, 10.0f)
-        };
-
-        Vector2D perceived_target = {
-            target_pos.x + GenerateGaussianNoise(0, target_width * 0.15f),
-            target_pos.y + GenerateGaussianNoise(0, target_width * 0.15f)
-        };
-
-        for (int i = 0; i <= total_steps; ++i) {
-            float t = static_cast<float>(i) / static_cast<float>(total_steps);
-            float ease_t = t * t * (3.0f - 2.0f * t); 
-            Vector2D step_pos = CubicBezier(current_pos, control1, control2, perceived_target, ease_t);
-            step_pos.x += GenerateGaussianNoise(0, 0.5f);
-            step_pos.y += GenerateGaussianNoise(0, 0.5f);
-            human_path.push_back(step_pos);
-        }
-        human_path.push_back(target_pos);
-        return human_path;
+    AmmarTelemetrySpoofer() { rng.seed(std::chrono::high_resolution_clock::now().time_since_epoch().count()); }
+    Vector2D Humanize(Vector2D target) {
+        std::normal_distribution<float> dist(0, 0.4f);
+        return { target.x + dist(rng), target.y + dist(rng) };
     }
 };
-
-// كائن عالمي لمحرك السلوك لاستخدامه في الهوكات
-AmmarTelemetrySpoofer* GlobalSpoofer = nullptr;
+static AmmarTelemetrySpoofer* GlobalSpoofer = nullptr;
 
 // =================================================================
-// [ واجهة API الديناميكية المخفية ]
+// [ واجهة API الديناميكية الموحدة ]
 // =================================================================
 namespace API {
     typedef int (*strcmp_t)(const char*, const char*);
@@ -134,469 +63,196 @@ namespace API {
     typedef SEL (*sel_registerName_t)(const char*);
     typedef Method (*class_getInstanceMethod_t)(Class, SEL);
     typedef IMP (*class_replaceMethod_t)(Class, SEL, IMP, const char*);
-    typedef const char* (*method_getTypeEncoding_t)(Method);
-    typedef IMP (*method_getImplementation_t)(Method);
 
     static strcmp_t sys_strcmp = nullptr;
     static objc_getClass_t sys_objc_getClass = nullptr;
     static sel_registerName_t sys_sel_registerName = nullptr;
     static class_getInstanceMethod_t sys_class_getInstanceMethod = nullptr;
     static class_replaceMethod_t sys_class_replaceMethod = nullptr;
-    static method_getTypeEncoding_t sys_method_getTypeEncoding = nullptr;
-    static method_getImplementation_t sys_method_getImplementation = nullptr;
 
-    static void Init() {
-        sys_strcmp = (strcmp_t)dlsym(RTLD_DEFAULT, OBFUSCATE("strcmp"));
-        sys_objc_getClass = (objc_getClass_t)dlsym(RTLD_DEFAULT, OBFUSCATE("objc_getClass"));
-        sys_sel_registerName = (sel_registerName_t)dlsym(RTLD_DEFAULT, OBFUSCATE("sel_registerName"));
-        sys_class_getInstanceMethod = (class_getInstanceMethod_t)dlsym(RTLD_DEFAULT, OBFUSCATE("class_getInstanceMethod"));
-        sys_class_replaceMethod = (class_replaceMethod_t)dlsym(RTLD_DEFAULT, OBFUSCATE("class_replaceMethod"));
-        sys_method_getTypeEncoding = (method_getTypeEncoding_t)dlsym(RTLD_DEFAULT, OBFUSCATE("method_getTypeEncoding"));
-        sys_method_getImplementation = (method_getImplementation_t)dlsym(RTLD_DEFAULT, OBFUSCATE("method_getImplementation"));
-    }
-}
-
-static inline id DynStr(const char* str) {
-    Class nsstr = API::sys_objc_getClass(OBFUSCATE("NSString"));
-    SEL alloc_sel = API::sys_sel_registerName(OBFUSCATE("alloc"));
-    SEL init_sel = API::sys_sel_registerName(OBFUSCATE("initWithUTF8String:"));
-    id allocated = ((id(*)(id, SEL))objc_msgSend)((id)nsstr, alloc_sel);
-    return ((id(*)(id, SEL, const char*))objc_msgSend)(allocated, init_sel, str);
-}
-
-// =================================================================
-// [ حوض الاستنساخ (NativeSpoof) لتمويه هوكات اللعبة ]
-// =================================================================
-namespace NativeSpoof {
-    static IMP pool_ret_0[300];
-    static IMP pool_ret_1[300];
-    static IMP pool_ret_void[300];
-    static int count_0 = 0, count_1 = 0, count_void = 0;
-
-    static void ScanGameMemory() {
-        const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);
-        intptr_t slide = _dyld_get_image_vmaddr_slide(0);
-        if (!header) return;
-
-        struct load_command *cmd = (struct load_command *)((char *)header + sizeof(struct mach_header_64));
-        for (uint32_t i = 0; i < header->ncmds; i++) {
-            if (cmd->cmd == LC_SEGMENT_64) {
-                struct segment_command_64 *seg = (struct segment_command_64 *)cmd;
-                if (API::sys_strcmp(seg->segname, "__TEXT") == 0) {
-                    struct section_64 *sec = (struct section_64 *)((char *)seg + sizeof(struct segment_command_64));
-                    for (uint32_t j = 0; j < seg->nsects; j++) {
-                        if (API::sys_strcmp(sec->sectname, "__text") == 0) {
-                            uint32_t *start = (uint32_t *)(sec->addr + slide);
-                            uint32_t *end = (uint32_t *)((char *)start + sec->size);
-                            for (uint32_t *p = start; p < end - 1; p++) {
-                                if (count_0 < 300 && p[0] == 0xD2800000 && p[1] == 0xD65F03C0) pool_ret_0[count_0++] = (IMP)p;
-                                if (count_1 < 300 && p[0] == 0xD2800020 && p[1] == 0xD65F03C0) pool_ret_1[count_1++] = (IMP)p;
-                                if (count_void < 300 && p[0] == 0xD65F03C0) pool_ret_void[count_void++] = (IMP)p;
-                                if (count_0 == 300 && count_1 == 300 && count_void == 300) return;
-                            }
-                        }
-                        sec = (struct section_64 *)((char *)sec + sizeof(struct section_64));
-                    }
-                }
-            }
-            cmd = (struct load_command *)((char *)cmd + cmd->cmdsize);
-        }
-    }
-    
-    static IMP GetRandomRet0() { return count_0 > 0 ? pool_ret_0[arc4random_uniform(count_0)] : NULL; }
-    static IMP GetRandomRet1() { return count_1 > 0 ? pool_ret_1[arc4random_uniform(count_1)] : NULL; }
-    static IMP GetRandomRetVoid() { return count_void > 0 ? pool_ret_void[arc4random_uniform(count_void)] : NULL; }
-
-    static bool IsOurSpoofedIMP(IMP imp) {
-        for(int i=0; i<count_0; i++) if(pool_ret_0[i] == imp) return true;
-        for(int i=0; i<count_1; i++) if(pool_ret_1[i] == imp) return true;
-        for(int i=0; i<count_void; i++) if(pool_ret_void[i] == imp) return true;
-        return false;
+    static bool Init() {
+        void* h = RTLD_DEFAULT;
+        sys_strcmp = (strcmp_t)dlsym(h, OBFUSCATE("strcmp"));
+        sys_objc_getClass = (objc_getClass_t)dlsym(h, OBFUSCATE("objc_getClass"));
+        sys_sel_registerName = (sel_registerName_t)dlsym(h, OBFUSCATE("sel_registerName"));
+        sys_class_getInstanceMethod = (class_getInstanceMethod_t)dlsym(h, OBFUSCATE("class_getInstanceMethod"));
+        sys_class_replaceMethod = (class_replaceMethod_t)dlsym(h, OBFUSCATE("class_replaceMethod"));
+        return (sys_strcmp && sys_objc_getClass && sys_sel_registerName);
     }
 }
 
 // =================================================================
-// [ VMT / Obj-C Phantom Swizzling ]
+// [ دوال الأشباح (Phantom Functions) لمنع الـ Crash ]
 // =================================================================
-__attribute__((visibility("hidden"))) id _sys_id_0(id self, SEL _cmd, ...) { return 0; }
-__attribute__((visibility("hidden"))) BOOL _sys_bool_yes(id self, SEL _cmd, ...) { return YES; }
-__attribute__((visibility("hidden"))) void _sys_void_empty(id self, SEL _cmd, ...) { }
+__attribute__((visibility("hidden"))) static void _dummy_void(id self, SEL _cmd, ...) {}
+__attribute__((visibility("hidden"))) static BOOL _dummy_bool_no(id self, SEL _cmd, ...) { return NO; }
+__attribute__((visibility("hidden"))) static BOOL _dummy_bool_yes(id self, SEL _cmd, ...) { return YES; }
+__attribute__((visibility("hidden"))) static int  _dummy_int_0(id self, SEL _cmd, ...) { return 0; }
+__attribute__((visibility("hidden"))) static int  _dummy_int_1(id self, SEL _cmd, ...) { return 1; }
+__attribute__((visibility("hidden"))) static int  _dummy_int_1024(id self, SEL _cmd, ...) { return 1024; }
+__attribute__((visibility("hidden"))) static id   _dummy_id_nil(id self, SEL _cmd, ...) { return nil; }
 
+// =================================================================
+// [ الرابط الآمن لمنع انهيار الذاكرة ]
+// =================================================================
 __attribute__((visibility("hidden")))
-static void _sys_bind_native(const char* className, const char* selectorName, int retType) {
-    Class cls = API::sys_objc_getClass(className);
-    if (cls) {
-        SEL sel = API::sys_sel_registerName(selectorName);
-        Method m = API::sys_class_getInstanceMethod(cls, sel);
-        if (m) {
-            IMP targetIMP = NULL;
-            if (retType == 0) targetIMP = NativeSpoof::GetRandomRet0();
-            else if (retType == 1) targetIMP = NativeSpoof::GetRandomRet1();
-            else if (retType == 2) targetIMP = NativeSpoof::GetRandomRetVoid();
-            
-            if (!targetIMP) { 
-                if (retType == 0) targetIMP = (IMP)_sys_id_0;
-                else if (retType == 1) targetIMP = (IMP)_sys_bool_yes;
-                else if (retType == 2) targetIMP = (IMP)_sys_void_empty;
-            }
-            API::sys_class_replaceMethod(cls, sel, targetIMP, API::sys_method_getTypeEncoding(m));
-        }
+static void _safe_bind(const char* cls, const char* sel, IMP imp) {
+    Class c = API::sys_objc_getClass(cls);
+    if (!c) return;
+    SEL s = API::sys_sel_registerName(sel);
+    Method m = API::sys_class_getInstanceMethod(c, s);
+    if (m && API::sys_class_replaceMethod) {
+        API::sys_class_replaceMethod(c, s, imp, method_getTypeEncoding(m));
     }
 }
 
 // =================================================================
-// [ الانقضاض المباشر (Dobby Inline Hooks) والتضليل الشبحي ]
+// [ هوك الحماية الأساسي - تفادي P_TRACED ]
 // =================================================================
-
-static IMP (*orig_method_getImplementation)(Method m);
-__attribute__((visibility("hidden"))) IMP my_method_getImplementation(Method m) {
-    IMP real_imp = orig_method_getImplementation(m);
-    if (NativeSpoof::IsOurSpoofedIMP(real_imp)) {
-        return NativeSpoof::GetRandomRetVoid(); 
-    }
-    return real_imp;
-}
-
-static int (*orig_access)(const char *p, int m);
-__attribute__((visibility("hidden"))) int my_access(const char *p, int m) {
-    if (p && (strstr(p, OBFUSCATE("Cydia")) || strstr(p, OBFUSCATE("frida")))) return -1;
-    return orig_access(p, m);
-}
-
 static int (*orig_sysctl)(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2);
-__attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2) {
+int my_sysctl(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2) {
     int r = orig_sysctl(n, nl, op, ol, np, nl2);
-    if (r == 0 && n && nl >= 3 && n[0] == CTL_KERN && n[1] == KERN_PROC && n[2] == KERN_PROC_PID) {
-        if (op) ((struct kinfo_proc *)op)->kp_proc.p_flag &= ~P_TRACED;
+    if (r == 0 && n && nl >= 3 && n[0] == 1 && n[1] == 14 && n[2] == getpid()) {
+        if (op) ((struct kinfo_proc *)op)->kp_proc.p_flag &= ~0x00000800;
     }
     return r;
 }
 
 // =================================================================
-// [ دمج محرك الإنتروبيا في هوك افتراضي للإدخال (مثال جاهز) ]
+// [ الإقلاع السيادي - الكتيبة الكاملة (159+ مسار) ]
 // =================================================================
-// هذا مجرد نموذج لكيفية دمج الـ Spoofer في דالة اللمس أو الكاميرا
-static void (*orig_UpdateCameraRotation)(void* player_controller, float pitch, float yaw);
-__attribute__((visibility("hidden"))) void my_UpdateCameraRotation(void* player_controller, float pitch, float yaw) {
-    if (GlobalSpoofer) {
-        // افتراض: جلب الإحداثيات الحالية من محرك اللعبة
-        Vector2D currentAim = {0.0f, 0.0f}; // استبدلها بجلب القيم الحقيقية
-        Vector2D targetAim = {pitch, yaw};  
-        
-        // تمرير الهدف لمحرك السلوك البشري لتوليد مسار مموه
-        std::vector<Vector2D> safePath = GlobalSpoofer->GenerateHumanizedPath(currentAim, targetAim, 50.0f);
-        
-        // تنفيذ الإحداثيات البشرية بالتدريج (يمكن معالجتها على مستوى الفريمات)
-        if (!safePath.empty()) {
-            Vector2D finalSafeAim = safePath.back();
-            orig_UpdateCameraRotation(player_controller, finalSafeAim.x, finalSafeAim.y);
-            return;
-        }
-    }
-    orig_UpdateCameraRotation(player_controller, pitch, yaw);
-}
-
-
-// =================================================================
-// [ واجهة المستخدم: رسالة الثالوث المحرم (Trinity Protocol) ]
-// =================================================================
-__attribute__((visibility("hidden")))
-static void showAmmarVIPMessage() {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        Class uiAppCls = API::sys_objc_getClass(OBFUSCATE("UIApplication"));
-        SEL sharedAppSel = API::sys_sel_registerName(OBFUSCATE("sharedApplication"));
-        id app = ((id(*)(id, SEL))objc_msgSend)((id)uiAppCls, sharedAppSel);
-
-        SEL keyWinSel = API::sys_sel_registerName(OBFUSCATE("keyWindow"));
-        id window = ((id(*)(id, SEL))objc_msgSend)(app, keyWinSel);
-
-        SEL rootVCSel = API::sys_sel_registerName(OBFUSCATE("rootViewController"));
-        id rootVC = ((id(*)(id, SEL))objc_msgSend)(window, rootVCSel);
-
-        if (rootVC) {
-            Class alertCtrlCls = API::sys_objc_getClass(OBFUSCATE("UIAlertController"));
-            SEL alertCtrlSel = API::sys_sel_registerName(OBFUSCATE("alertControllerWithTitle:message:preferredStyle:"));
-            id title = DynStr(OBFUSCATE("⚡ 𝗔𝗠𝗠𝗔𝗥 𝗭𝗘𝗨𝗦 𝟮𝟬𝟮𝟲 ⚡"));
-            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الثالوث المعماري بنجاح 💀\n\n[✓] Dobby Inline Injector\n[✓] Phantom VMT Swizzle\n[✓] ML Telemetry Spoofer Active\n\n🛡️ Zero-Trust Override 🛡️"));
-            id alert = ((id(*)(id, SEL, id, id, NSInteger))objc_msgSend)((id)alertCtrlCls, alertCtrlSel, title, msg, 1);
-
-            Class alertActCls = API::sys_objc_getClass(OBFUSCATE("UIAlertAction"));
-            SEL actSel = API::sys_sel_registerName(OBFUSCATE("actionWithTitle:style:handler:"));
-            id btn = DynStr(OBFUSCATE("🔥 إطلاق العنان 🔥"));
-            id action = ((id(*)(id, SEL, id, NSInteger, id))objc_msgSend)((id)alertActCls, actSel, btn, 0, nil);
-
-            SEL addActSel = API::sys_sel_registerName(OBFUSCATE("addAction:"));
-            ((void(*)(id, SEL, id))objc_msgSend)(alert, addActSel, action);
-
-            SEL presentSel = API::sys_sel_registerName(OBFUSCATE("presentViewController:animated:completion:"));
-            ((void(*)(id, SEL, id, BOOL, id))objc_msgSend)(rootVC, presentSel, alert, YES, nil);
-        }
-    });
-}
-
-// =================================================================
-// [ محرك الإقلاع السيادي الكامل وكتيبة الـ 159 مساراً ]
-// =================================================================
-
 __attribute__((constructor))
-static void Ignite_Ammar_Zeus_2026() {
+static void Ignite_Ammar_Zeus_Full_Arsenal() {
+    if (!API::Init()) return;
     
-    API::Init();
-    NativeSpoof::ScanGameMemory();
-    
-    // تفعيل محرك الإنتروبيا العالمي
+    // تهيئة محرك السلوك البشري
     GlobalSpoofer = new AmmarTelemetrySpoofer();
 
-    // -------------------------------------------------------------
-    // استخدام Dobby لعمل Inline Hooks للدوال الحساسة
-    // -------------------------------------------------------------
-    void* sysctl_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("sysctl"));
-    if (sysctl_ptr) DobbyHook(sysctl_ptr, (void*)my_sysctl, (void**)&orig_sysctl);
+    // هوك Sysctl عبر Dobby
+    void* s_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("sysctl"));
+    if (s_ptr) DobbyHook(s_ptr, (void*)my_sysctl, (void**)&orig_sysctl);
 
-    void* access_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("access"));
-    if (access_ptr) DobbyHook(access_ptr, (void*)my_access, (void**)&orig_access);
+    // -----------------------------------------------------------------
+    // [1] كتيبة الأمن الأساسي واكتشاف الهاكات (Core Security & GSDK)
+    // -----------------------------------------------------------------
+    _safe_bind(OBFUSCATE("SecurityChecker"), OBFUSCATE("IsFileSystemModified"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("SecurityChecker"), OBFUSCATE("isJailbroken"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("SecurityChecker"), OBFUSCATE("checkDylibs"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("GSDKInGameManager"), OBFUSCATE("GSDKRealTimeDetect"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKInGameSystem"), OBFUSCATE("GSDKInnerRealTimeDetect"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKInGameSystem"), OBFUSCATE("GSDKInnerEnd"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKInitManager"), OBFUSCATE("detectOperation_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKCPU"), OBFUSCATE("getSystemCPUCircle"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GSDKMemory"), OBFUSCATE("getSystemAvailableMemory"), (IMP)_dummy_int_1024);
+    _safe_bind(OBFUSCATE("GSDKDetectPort_isConnection"), OBFUSCATE("Port_"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("serviceCommunication"), OBFUSCATE("getValueForKeypath"), (IMP)_dummy_id_nil);
+    _safe_bind(OBFUSCATE("NetworkManager"), OBFUSCATE("SendSecurityReport"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKInGameSystem_GSDKInnerSaveFPS"), OBFUSCATE("FpsDots_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKInGameSystem_GSDKInnerStart_SceneID"), OBFUSCATE("RoomIP_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKPayEvent_GSDKPay_Tag_Status"), OBFUSCATE("Msg_"), (IMP)_dummy_void);
 
-    void* method_getImpl_ptr = dlsym(RTLD_DEFAULT, OBFUSCATE("method_getImplementation"));
-    if (method_getImpl_ptr) DobbyHook(method_getImpl_ptr, (void*)my_method_getImplementation, (void**)&orig_method_getImplementation);
+    // -----------------------------------------------------------------
+    // [2] كتيبة المراقبة والأداء (APM Monitoring)
+    // -----------------------------------------------------------------
+    _safe_bind(OBFUSCATE("APMMonitor"), OBFUSCATE("startMonitoring:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("APMMonitor"), OBFUSCATE("handleEvent:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("APMCollector"), OBFUSCATE("collectMetrics:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("APMCollector"), OBFUSCATE("reportNow"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLoadLevel:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLevelFin"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStepEvent:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStreamEvent:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getBatteryState"), (IMP)_dummy_int_1);
+    _safe_bind(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getThermalState"), (IMP)_dummy_int_0);
 
-    showAmmarVIPMessage();
+    // -----------------------------------------------------------------
+    // [3] كتيبة محرك الصوت والاستخبارات (GCloud Voice Engine)
+    // -----------------------------------------------------------------
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableLog:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("APITrace:callInfo:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartTve"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableMultiRoom:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableRoomMicrophone:enable:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableRoomSpeaker:enable:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartRecording:"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StopRecording"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetLogCallBack:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetMicLevel"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetSpeakerLevel"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetMicVolume:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetSpeakerVolume:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("TestMic"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableReportALL:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableReportALLAbroad:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableReportForAbroad:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ReportPlayer:arg1:arg2:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetReportBufferTime:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceExtension"), OBFUSCATE("CheckDeviceMuteStat"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("GCloudVoiceExtension"), OBFUSCATE("EnableKeyWordsDetect_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudVoiceExtension"), OBFUSCATE("GetBGMPlayState"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceExtension"), OBFUSCATE("GetMicState"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GCloudVoiceExtension"), OBFUSCATE("GetSpeakerState"), (IMP)_dummy_int_0);
+    _safe_bind(OBFUSCATE("GVoiceMuteSwitch"), OBFUSCATE("detectMuteSwitch"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("GetAudioDeviceConnectState"), (IMP)_dummy_int_1);
+    _safe_bind(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("UpdateDeviceState_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GVGCloudVoice"), OBFUSCATE("openMic"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GVGCloudVoice"), OBFUSCATE("openSpeaker"), (IMP)_dummy_void);
 
-    // =================================================================
-    // دوال الحماية الأساسية والشبكة والأسلحة
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("serviceCommunication"), OBFUSCATE("getValueForKeypath"), 0);
-    _sys_bind_native(OBFUSCATE("WeaponProcessor"), OBFUSCATE("CalculateDamage"), 0);
-    _sys_bind_native(OBFUSCATE("CharacterMovement"), OBFUSCATE("IsSpeedExceeded"), 0);
-    _sys_bind_native(OBFUSCATE("NetworkManager"), OBFUSCATE("SendSecurityReport"), 2);
-    _sys_bind_native(OBFUSCATE("SecurityChecker"), OBFUSCATE("IsFileSystemModified"), 0);
-    _sys_bind_native(OBFUSCATE("BulletSimulator"), OBFUSCATE("CheckWallCollision"), 0);
+    // -----------------------------------------------------------------
+    // [4] كتيبة رصد الشبكة والـ Ping
+    // -----------------------------------------------------------------
+    _safe_bind(OBFUSCATE("GSDKPing"), OBFUSCATE("ping"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKPing"), OBFUSCATE("stopPing"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKPing"), OBFUSCATE("dealloc"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKPingDetect"), OBFUSCATE("ping"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKPingDetect"), OBFUSCATE("dealloc"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKRealTimeDetect"), OBFUSCATE("pingDelayDetect_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKRealTimeDetect_updDelayDetect"), OBFUSCATE("Port_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GSDKUdpDetect_isUDPConnect"), OBFUSCATE("Port_"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("GSDKWIFI"), OBFUSCATE("ping_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("SimplePing"), OBFUSCATE("start"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("SimplePing"), OBFUSCATE("stop"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("SimplePing"), OBFUSCATE("sendPingWithData_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("PingDelegate"), OBFUSCATE("pingTimer"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionRequired"), (IMP)_dummy_bool_no);
+    _safe_bind(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionOnDemand"), (IMP)_dummy_bool_no);
 
-    // =================================================================
-    // دوال GSDK (Ping, Network, Memory, CPU)
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("GSDKCPU"), OBFUSCATE("getSystemCPUCircle"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKDetectPort_isConnection"), OBFUSCATE("Port_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKHttpDnsResolver"), OBFUSCATE("dealloc"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKHttpRequest"), OBFUSCATE("dealloc"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKHttpRequest_requestControl_Openid_Acctype_Zoneid"), OBFUSCATE("Env_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKInGameManager"), OBFUSCATE("GSDKRealTimeDetect"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKInGameSystem"), OBFUSCATE("GSDKInnerEnd"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKInGameSystem"), OBFUSCATE("GSDKInnerRealTimeDetect"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKInGameSystem_GSDKInnerSaveFPS"), OBFUSCATE("FpsDots_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKInGameSystem_GSDKInnerStart_SceneID"), OBFUSCATE("RoomIP_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKInitManager"), OBFUSCATE("detectOperation_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKMemory"), OBFUSCATE("getSystemAvailableMemory"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPayEvent_GSDKPay_Tag_Status"), OBFUSCATE("Msg_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing"), OBFUSCATE("dealloc"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing"), OBFUSCATE("ping"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing_simplePing_didFailToSendPacket_sequenceNumber"), OBFUSCATE("error_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing_simplePing"), OBFUSCATE("didFailWithError_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing_simplePing_didReceivePingResponsePacket"), OBFUSCATE("sequenceNumber_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing_simplePing"), OBFUSCATE("didReceiveUnexpectedPacket_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing_simplePing_didSendPacket"), OBFUSCATE("sequenceNumber_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing_simplePing"), OBFUSCATE("didStartWithAddress_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPing"), OBFUSCATE("stopPing"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect"), OBFUSCATE("dealloc"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect"), OBFUSCATE("ping"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect_simplePing_didFailToSendPacket_sequenceNumber"), OBFUSCATE("error_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect_simplePing"), OBFUSCATE("didFailWithError_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect_simplePing_didReceivePingResponsePacket"), OBFUSCATE("sequenceNumber_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect_simplePing"), OBFUSCATE("didReceiveUnexpectedPacket_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect_simplePing_didSendPacket"), OBFUSCATE("sequenceNumber_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKPingDetect_simplePing"), OBFUSCATE("didStartWithAddress_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKRealTimeDetect"), OBFUSCATE("pingDelayDetect_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKRealTimeDetect_updDelayDetect"), OBFUSCATE("Port_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKUdpDetect_isUDPConnect"), OBFUSCATE("Port_"), 0);
-    _sys_bind_native(OBFUSCATE("GSDKWIFI"), OBFUSCATE("ping_"), 0);
+    // -----------------------------------------------------------------
+    // [5] كتيبة الإحصائيات (IMSDK, Tencent, Firebase)
+    // -----------------------------------------------------------------
+    _safe_bind(OBFUSCATE("IMSDKStatAdjustManager"), OBFUSCATE("reportEvent_eventBody"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("IMSDKStatAdjustManager"), OBFUSCATE("reportEvent_params"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("IMSDKStatAdjustManager"), OBFUSCATE("reportPurchase_currentCode_expense"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("IMSDKStatAdjustManager"), OBFUSCATE("reportRevenue_currencyCode_revenueValue_params"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("TDataMasterApplication"), OBFUSCATE("reportEventWithSrcID_eventName"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("IMSDKNoticeIMSDKManager"), OBFUSCATE("imsdkCoreKitNoticeImageFileHash_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("INTLWebViewManager_openURL_observerID"), OBFUSCATE("baseParams_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FIRMessaging"), OBFUSCATE("retrieveFCMTokenForSenderID:completion:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FIRMessaging"), OBFUSCATE("deleteFCMTokenForSenderID:completion:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FIRMessaging"), OBFUSCATE("subscribeToTopic:completion:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FIRMessaging"), OBFUSCATE("setAPNSToken:withUserInfo:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FIRMessagingRmqManager"), OBFUSCATE("openDatabase"), (IMP)_dummy_void);
 
-    // =================================================================
-    // دوال المراقبة والأداء (APM)
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("APMMonitor"), OBFUSCATE("handleEvent:"), 0);
-    _sys_bind_native(OBFUSCATE("APMMonitor"), OBFUSCATE("startMonitoring:"), 0);
-    _sys_bind_native(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getBatteryState"), 0);
-    _sys_bind_native(OBFUSCATE("APMDeviceInfoSupport"), OBFUSCATE("getThermalState"), 0);
-    _sys_bind_native(OBFUSCATE("APMCollector"), OBFUSCATE("collectMetrics:"), 0);
-    _sys_bind_native(OBFUSCATE("APMCollector"), OBFUSCATE("reportNow"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLoadLevel:"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("markLevelFin"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStepEvent:"), 0);
-    _sys_bind_native(OBFUSCATE("TApmSceneMarker"), OBFUSCATE("postStreamEvent:"), 0);
-
-    // =================================================================
-    // دوال المايكروفون، الصوتيات، والإشعارات
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionOnDemand"), 1);
-    _sys_bind_native(OBFUSCATE("AReachability"), OBFUSCATE("isConnectionRequired"), 1);
-    _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("GetAudioDeviceConnectState"), 0);
-    _sys_bind_native(OBFUSCATE("AudioDeviceMgr"), OBFUSCATE("UpdateDeviceState_"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessagingRmqManager"), OBFUSCATE("openDatabase"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoice"), OBFUSCATE("openMic"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoice"), OBFUSCATE("openSpeaker"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoice_setAppInfo_withKey"), OBFUSCATE("andOpenID_"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("CheckDeviceMuteStat"), 1);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("EnableKeyWordsDetect_"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("GetBGMPlayState"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("GetMicState"), 0);
-    _sys_bind_native(OBFUSCATE("GVGCloudVoiceExtension"), OBFUSCATE("GetSpeakerState"), 0);
-    _sys_bind_native(OBFUSCATE("GVoiceMuteSwitch"), OBFUSCATE("detectMuteSwitch"), 0);
-
-    // =================================================================
-    // دوال IMSDK و Tencent و Ping
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("IMSDKCustomWebView"), OBFUSCATE("dealloc"), 0);
-    _sys_bind_native(OBFUSCATE("IMSDKNoticeIMSDKManager_getImageCache_imagePath_imageHash_queue"), OBFUSCATE("completeHandle_"), 0);
-    _sys_bind_native(OBFUSCATE("IMSDKNoticeIMSDKManager"), OBFUSCATE("imsdkCoreKitNoticeImageFileHash_"), 0);
-    _sys_bind_native(OBFUSCATE("IMSDKStatAdjustManager_reportEvent_eventBody"), OBFUSCATE("isRealtime_"), 1);
-    _sys_bind_native(OBFUSCATE("IMSDKStatAdjustManager_reportEvent_params"), OBFUSCATE("isRealtime_"), 1);
-    _sys_bind_native(OBFUSCATE("IMSDKStatAdjustManager_reportPurchase_currentCode_expense"), OBFUSCATE("isRealTime_"), 1);
-    _sys_bind_native(OBFUSCATE("IMSDKStatAdjustManager_reportRevenue_currencyCode_revenueValue_params"), OBFUSCATE("extraJson_"), 0);
-    _sys_bind_native(OBFUSCATE("INTLWebViewManager_openURL_observerID"), OBFUSCATE("baseParams_"), 0);
-    _sys_bind_native(OBFUSCATE("PingDelegate"), OBFUSCATE("pingTimer"), 0);
-    _sys_bind_native(OBFUSCATE("PingDelegate_simplePing_didFailToSendPacket_sequenceNumber"), OBFUSCATE("error_"), 0);
-    _sys_bind_native(OBFUSCATE("PingDelegate_simplePing_didSendPacket"), OBFUSCATE("sequenceNumber_"), 0);
-    _sys_bind_native(OBFUSCATE("QQOpenApiUtility"), OBFUSCATE("cgiRequestGetSdkConfig_"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing"), OBFUSCATE("dealloc"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing"), OBFUSCATE("didFailWithError_"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing_pingPacketWithType_payload"), OBFUSCATE("requiresChecksum_"), 1);
-    _sys_bind_native(OBFUSCATE("SimplePing"), OBFUSCATE("readData"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing"), OBFUSCATE("sendPingWithData_"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing"), OBFUSCATE("start"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing"), OBFUSCATE("startWithHostAddress"), 0);
-    _sys_bind_native(OBFUSCATE("SimplePing_validatePingResponsePacket"), OBFUSCATE("sequenceNumber_"), 0);
-    _sys_bind_native(OBFUSCATE("TDataMasterApplication"), OBFUSCATE("handleOpenURL_"), 0);
-    _sys_bind_native(OBFUSCATE("TDataMasterApplication_reportEventWithSrcID_eventName"), OBFUSCATE("AndEventKVArray_"), 0);
-    _sys_bind_native(OBFUSCATE("TcApiTool"), OBFUSCATE("openUniversallinkIfNeed_"), 0);
-
-    // =================================================================
-    // دوال GCloud Voice Engine الشاملة
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("GTMSessionFetcher_setSystemCompletionHandler"), OBFUSCATE("forSessionIdentifier_"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudCoreRemoteConfig"), OBFUSCATE("updateConfig:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudCoreRemoteConfig"), OBFUSCATE("getConfig:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartTve"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("JoinTeamRoom_Scenes:roomName:timeout:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("QuitRoom_Scenes:timeout:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableMultiRoom:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableRoomMicrophone:enable:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableRoomSpeaker:enable:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ApplyMessageKey:timestamp:timeout:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartRecording:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StopRecording"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("UploadRecordedFile:timeout:fileProperty:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("DownloadRecordedFile:filePath:timeout:fileProperty:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableLog:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetLogCallBack:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetMicLevel"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetSpeakerLevel"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetMicVolume:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetSpeakerVolume:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SpeechToText:token:timestamp:timeout:language:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ForbidMemberVoice:enable:inRoom:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("TestMic"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetFileParam:data:time:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetBGMPath:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartBGMPlay"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StopBGMPlay"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("PauseBGMPlay"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ResumeBGMPlay"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableNativeBGMPlay:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetBitRate:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetDataFree:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("RSTSStartRecording:targetLang:targetLangCnt:action:timeout:recordFilePath:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("RSTSSpeechToSpeech:targetLang:targetLangCnt:dirPath:voiceType:voiceRate:volume:timeout:recordFilePath:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("RSTSSpeechToText:targetLang:targetLangCnt:timeout:recordFilePath:srcLangStr:extInfo:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("RSTSStopRecording"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("TextToStreamSpeechStart:voiceType:timeout:filePath:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("TextToStreamSpeechStop"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableTranslate:isEnable:lang:transType:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableMagicVoice:isEnable:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableRecvMagicVoice:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("RoomGeneralDataChannel:content:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("APITrace:callInfo:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetPlayerInfoAbroad:members:lang:count:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableReportALL:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableReportALLAbroad:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableReportForAbroad:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ReportFileForAbroad:bTranslate:bChangeVoice:time:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableCivilFile:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableCivilVoice:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetCivilBinPath:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableEarBack:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartKaraokeRecording:accfile:orifile:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StopKaraokeRecording"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("EnableAccFilePlay:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetKaraokeVoiceVol:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetKaraokeAccVol:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetKaraokeVoiceDelay:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StartPreview"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("StopPreview"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SeekTimeMsForPreview:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SeekTimeMsForAcc:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("PauseKaraoke"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ResumeKaraoke"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetRecordKaraokeTotalTime"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetBGMLevel"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetReportedPlayerInfo:arg1:arg2:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("ReportPlayer:arg1:arg2:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetReportBufferTime:"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetBGMFileTime"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("GetBGMPlayTime"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudVoiceEngine"), OBFUSCATE("SetBGMPlayTime:"), 0);
-
-    // =================================================================
-    // دوال Facebook Ads و Firebase
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("checkViewability:"), 0);
-    _sys_bind_native(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("stopMonitoring"), 0);
-    _sys_bind_native(OBFUSCATE("FBAdMonitor"), OBFUSCATE("startMonitoringAd:"), 0);
-    _sys_bind_native(OBFUSCATE("FBAdMonitor"), OBFUSCATE("stopMonitoring"), 0);
-    _sys_bind_native(OBFUSCATE("FBAdEvent"), OBFUSCATE("logEvent:withParameters:"), 0);
-    _sys_bind_native(OBFUSCATE("FBAdLogger"), OBFUSCATE("logMessage:withLevel:"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("retrieveFCMTokenForSenderID:completion:"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("deleteFCMTokenForSenderID:completion:"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("subscribeToTopic:completion:"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("unsubscribeFromTopic:completion:"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("setAPNSToken:withUserInfo:"), 0);
-    _sys_bind_native(OBFUSCATE("FIRMessaging"), OBFUSCATE("APNSToken"), 0);
-    
-    // =================================================================
-    // دوال الإعلانات GADAppOpenAd
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("GADAdNetworkResponseInfo"), OBFUSCATE("adUnitMapping"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd_ad"), OBFUSCATE("didFailToPresentFullScreenContentWithError_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidDismissFullScreenContent_"), 1);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordClick_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordImpression_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adWillDismissFullScreenContent_"), 1);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adWillPresentFullScreenContent_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd_canPresentFromRootViewController"), OBFUSCATE("error_"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("responseInfo"), 0);
-    _sys_bind_native(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("setPaidEventHandler_"), 0);
-    _sys_bind_native(OBFUSCATE("GADMobileAds"), OBFUSCATE("initializationStatus"), 0);
-
-    // =================================================================
-    // دوال QQ API
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendReq:resultBlock:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendThirdAppBindGroupReq:resultBlock:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendThirdAppUnBindGroupReq:resultBlock:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendThirdAppJoinGroupReq:resultBlock:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendQueryQQGroupProInfo:resultBlock:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendMessageToQQAuthWithReq:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendMessageToQQAvatarWithReq:"), 0);
-    _sys_bind_native(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendMessageToFaceCollectionWithReq:"), 0);
-
-    // =================================================================
-    // دوال Unity, TikTok, VK, SnapChat
-    // =================================================================
-    _sys_bind_native(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("Initialize"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("ReportEvent"), 0);
-    _sys_bind_native(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("SetGameObjectName:"), 0);
-    _sys_bind_native(OBFUSCATE("TikTokAuth"), OBFUSCATE("authorizeWithPermissions:"), 0);
-    _sys_bind_native(OBFUSCATE("TikTokAuth"), OBFUSCATE("handleOpenURL:"), 0);
-    _sys_bind_native(OBFUSCATE("VKAuth"), OBFUSCATE("authorizeWithPermissions:"), 0);
-    _sys_bind_native(OBFUSCATE("VKAuth"), OBFUSCATE("logout"), 0);
-    _sys_bind_native(OBFUSCATE("SCSDKLoginClient"), OBFUSCATE("loginWithCompletion:"), 0);
-    _sys_bind_native(OBFUSCATE("SCSDKLoginClient"), OBFUSCATE("logout"), 0);
+    // -----------------------------------------------------------------
+    // [6] كتيبة الإعلانات والتواصل الاجتماعي (Social & Ads)
+    // -----------------------------------------------------------------
+    _safe_bind(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("checkViewability:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FBAdViewabilityValidator"), OBFUSCATE("stopMonitoring"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FBAdMonitor"), OBFUSCATE("startMonitoringAd:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FBAdMonitor"), OBFUSCATE("stopMonitoring"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FBAdEvent"), OBFUSCATE("logEvent:withParameters:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("FBAdLogger"), OBFUSCATE("logMessage:withLevel:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GADMobileAds"), OBFUSCATE("initializationStatus"), (IMP)_dummy_int_1);
+    _safe_bind(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordClick_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("adDidRecordImpression_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GADAppOpenAd"), OBFUSCATE("setPaidEventHandler_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendReq:resultBlock:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendThirdAppBindGroupReq:resultBlock:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("QQApiInterface"), OBFUSCATE("sendQueryQQGroupProInfo:resultBlock:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("QQOpenApiUtility"), OBFUSCATE("cgiRequestGetSdkConfig_"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("Initialize"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("GCloudUnityPlugin"), OBFUSCATE("ReportEvent"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("TikTokAuth"), OBFUSCATE("authorizeWithPermissions:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("VKAuth"), OBFUSCATE("authorizeWithPermissions:"), (IMP)_dummy_void);
+    _safe_bind(OBFUSCATE("SCSDKLoginClient"), OBFUSCATE("loginWithCompletion:"), (IMP)_dummy_void);
 }
