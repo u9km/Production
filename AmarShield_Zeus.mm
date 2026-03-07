@@ -13,8 +13,8 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 
-// [ التقنية الأولى: Dobby للربط المباشر في الذاكرة الحية ]
-#include <dobby.h> 
+// [ تم إصلاح الأقواس لتناسب الملف المحلي ]
+#include "dobby.h" 
 
 #ifndef P_TRACED
 #define P_TRACED 0x00000800
@@ -192,7 +192,7 @@ static IMP (*orig_method_getImplementation)(Method m);
 __attribute__((visibility("hidden"))) IMP my_method_getImplementation(Method m) {
     IMP real_imp = orig_method_getImplementation(m);
     if (NativeSpoof::IsOurSpoofedIMP(real_imp)) {
-        return NativeSpoof::GetRandomRetVoid(); // كذب على الحماية وأعطها عنواناً أصلياً
+        return NativeSpoof::GetRandomRetVoid(); 
     }
     return real_imp;
 }
@@ -227,7 +227,8 @@ static void showAmmarVIPMessage() {
         id window = ((id(*)(id, SEL))objc_msgSend)(app, keyWinSel);
 
         SEL rootVCSel = API::sys_sel_registerName(OBFUSCATE("rootViewController"));
-        id rootVC = ((id(*)(id, SEL))window, rootVCSel);
+        // [ تم إصلاح خطأ الاستدعاء هنا ]
+        id rootVC = ((id(*)(id, SEL))objc_msgSend)(window, rootVCSel);
 
         if (rootVC) {
             Class alertCtrlCls = API::sys_objc_getClass(OBFUSCATE("UIAlertController"));
@@ -259,7 +260,7 @@ static void Ignite_Ammar_Zeus_2026() {
     
     API::Init();
     NativeSpoof::ScanGameMemory();
-    HWBP_Engine::SetupHardwareBreakpoints(); // تشويش مسجلات العتاد
+    HWBP_Engine::SetupHardwareBreakpoints(); 
 
     // -------------------------------------------------------------
     // استخدام Dobby لعمل Inline Hooks للدوال الحساسة
