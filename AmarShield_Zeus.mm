@@ -16,7 +16,7 @@
 #define P_TRACED 0x00000800
 #endif
 
-// استخدام الهيكل الجديد المموه للفيش هوك
+// استخدام الهيكل الجديد المموه
 struct ios_mem_task { const char *name; void *replacement; void **replaced; };
 extern "C" int ios_memory_sync(struct ios_mem_task tasks[], size_t tasks_nel);
 
