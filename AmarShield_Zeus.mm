@@ -83,14 +83,15 @@ namespace API {
 
 // =================================================================
 // [ دوال الأشباح (Phantom Functions) لمنع الـ Crash ]
+// تمت إضافة unused لمنع المترجم من إيقاف البناء إذا لم نستخدم الدالة
 // =================================================================
-__attribute__((visibility("hidden"))) static void _dummy_void(id self, SEL _cmd, ...) {}
-__attribute__((visibility("hidden"))) static BOOL _dummy_bool_no(id self, SEL _cmd, ...) { return NO; }
-__attribute__((visibility("hidden"))) static BOOL _dummy_bool_yes(id self, SEL _cmd, ...) { return YES; }
-__attribute__((visibility("hidden"))) static int  _dummy_int_0(id self, SEL _cmd, ...) { return 0; }
-__attribute__((visibility("hidden"))) static int  _dummy_int_1(id self, SEL _cmd, ...) { return 1; }
-__attribute__((visibility("hidden"))) static int  _dummy_int_1024(id self, SEL _cmd, ...) { return 1024; }
-__attribute__((visibility("hidden"))) static id   _dummy_id_nil(id self, SEL _cmd, ...) { return nil; }
+__attribute__((visibility("hidden"), unused)) static void _dummy_void(id self, SEL _cmd, ...) {}
+__attribute__((visibility("hidden"), unused)) static BOOL _dummy_bool_no(id self, SEL _cmd, ...) { return NO; }
+__attribute__((visibility("hidden"), unused)) static BOOL _dummy_bool_yes(id self, SEL _cmd, ...) { return YES; }
+__attribute__((visibility("hidden"), unused)) static int  _dummy_int_0(id self, SEL _cmd, ...) { return 0; }
+__attribute__((visibility("hidden"), unused)) static int  _dummy_int_1(id self, SEL _cmd, ...) { return 1; }
+__attribute__((visibility("hidden"), unused)) static int  _dummy_int_1024(id self, SEL _cmd, ...) { return 1024; }
+__attribute__((visibility("hidden"), unused)) static id   _dummy_id_nil(id self, SEL _cmd, ...) { return nil; }
 
 // =================================================================
 // [ الرابط الآمن لمنع انهيار الذاكرة ]
@@ -119,7 +120,7 @@ int my_sysctl(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2) {
 }
 
 // =================================================================
-// [ الإقلاع السيادي - الكتيبة الكاملة (159+ مسار) ]
+// [ الإقلاع السيادي - الكتيبة الكاملة (159 مسار) ]
 // =================================================================
 __attribute__((constructor))
 static void Ignite_Ammar_Zeus_Full_Arsenal() {
