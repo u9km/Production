@@ -1,47 +1,44 @@
-name: libwebp-Production-Build
-
+name: Turbo-Build-Zeus
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build & Sign Dylib
     runs-on: macos-latest
-
-    env:
-      THEOS: ${{ github.workspace }}/theos
-
     steps:
-      - name: 📥 Checkout
+      - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Theos
+      - name: 📦 Cache Theos & SDKs (سرعة التيربو)
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          # إذا أردت يوماً تحديث ثيوس، فقط غير v1 إلى v2 هنا
+          key: theos-ios14-v1
+
+      - name: ⚙️ Install Theos (فقط إذا لم يكن مخزناً)
+        if: steps.cache-theos.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-          brew install ldid
 
-      - name: 🚀 Compile AmarShield Zeus
+      - name: 🚀 Build & Sign (بناء فوري)
         run: |
+          brew install ldid
           export THEOS=$GITHUB_WORKSPACE/theos
           make clean
           make package FINALPACKAGE=1
-        
-      - name: 🛡️ Extract & Fix Integrity
-        run: |
+          
           mkdir -p output
-          # الدخول مباشرة للمجلد النهائي لضمان سحب الملف الصحيح فقط
           cp .theos/obj/arm64/libwebp.dylib output/libwebp
-          
-          echo "Checking Mach-O Header..."
-          file output/libwebp
-          
-          echo "Signing with ldid to bypass Security Check..."
           ldid -S output/libwebp
 
-      - name: 📤 Upload Finished libwebp
+      - name: 📤 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libwebp-final-payload
+          name: libwebp-turbo
           path: output/libwebp
