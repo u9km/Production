@@ -21,12 +21,13 @@ jobs:
         with:
           submodules: recursive
 
+      # تم تغيير اسم الكاش لإجبار السيرفر على تحميل بيئة نظيفة 100%
       - name: 📦 Cache Theos
         id: cache-theos
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
-          key: ${{ runner.os }}-theos-master-v1
+          key: ${{ runner.os }}-theos-master-v2
 
       - name: ⚙️ Setup Theos Environment
         if: steps.cache-theos.outputs.cache-hit != 'true'
@@ -36,22 +37,28 @@ jobs:
       - name: 🛠️ Install Dependencies (ldid)
         run: brew install ldid
 
+      - name: 🔍 Verify Source Code (Anti-Cache Check)
+        run: |
+          echo "Checking if the code is the NEW Camouflaged version..."
+          cat AmarShield_Zeus.mm | grep "CoreMemUtils" || (echo "❌ OLD CODE DETECTED! GitHub didn't sync!" && exit 1)
+          echo "✅ New Code Confirmed."
+
       - name: 🚀 Compile AmarShield Zeus (Release Mode)
         run: |
-          echo "Starting Sovereign Build with Final Package Flags..."
           make clean
           make package FINALPACKAGE=1
         
-      - name: 🕵️‍♂️ Extract & Verify Stripped Dylib
+      - name: 🕵️‍♂️ Extract & FORCE STRIP Dylib
         run: |
           mkdir -p Final_Dylib
-          # البحث عن ملف الدايلب ونقله
           find .theos/obj -name "*.dylib" -type f -exec cp {} Final_Dylib/ \;
           
           echo "====================================="
-          echo "🛡️ Dylib Compilation Status:"
+          echo "🛡️ Executing Military Strip (Force Remove All Symbols)..."
+          # أداة strip من أبل لمسح كل شيء بالقوة
+          strip -x Final_Dylib/*.dylib
           echo "====================================="
-          # طباعة معلومات الملف للتأكد من أنه تم طحنه (Stripped) بنجاح
+          
           ls -lh Final_Dylib/*.dylib
           file Final_Dylib/*.dylib
 
