@@ -8,6 +8,9 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
+extern "C" {
+// ...
+
 
 typedef uintptr_t addr_t;
 typedef uint32_t addr32_t;
