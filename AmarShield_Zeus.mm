@@ -23,14 +23,14 @@ struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
 // =================================================================
-// [ الجزء الأول: محرك طحن النصوص C++14/17 (Zero-Leak Shredder) ]
+// [ الجزء الأول: محرك طحن النصوص C++14/17 (Zero-Leak Shredder) مع التمويه ]
 // =================================================================
 #include <utility>
 
-namespace AmmarShield {
+namespace CoreMemUtils { // تمويه اسم النظام لمنع تسريبه كبصمة
     template <size_t N, char K, size_t... Is>
     constexpr auto EncryptString(const char (&str)[N], std::index_sequence<Is...>) {
-        // تفكيك النص إلى بايتات مفردة وتشفيرها فوراً (المترجم لن يستطيع حفظ الكلمة الأصلية)
+        // تفكيك النص إلى بايتات مفردة وتشفيرها فوراً
         struct { char data[N]; } result = { { static_cast<char>(str[Is] ^ K)... } };
         return result;
     }
@@ -38,9 +38,9 @@ namespace AmmarShield {
 
 #define OBFUSCATE(str) \
     ([]() -> char* { \
-        constexpr char key = (__TIME__[7] ^ __LINE__) % 255 + 1; \
-        /* استدعاء محرك الطحن وإجباره على العمل في وقت الترجمة (Compile-Time) */ \
-        constexpr auto obfuscated = AmmarShield::EncryptString<sizeof(str), key>(str, std::make_index_sequence<sizeof(str)>{}); \
+        /* الإصلاح هنا: استخدام 127 بدلاً من 255 لتجنب خطأ تجاوز سعة الـ char */ \
+        constexpr char key = (__TIME__[7] ^ __LINE__) % 127 + 1; \
+        constexpr auto obfuscated = CoreMemUtils::EncryptString<sizeof(str), key>(str, std::make_index_sequence<sizeof(str)>{}); \
         static char decrypted[sizeof(str)]; \
         static bool init = false; \
         if (!init) { \
@@ -51,6 +51,7 @@ namespace AmmarShield {
         } \
         return decrypted; \
     }())
+
 
 
 // =================================================================
