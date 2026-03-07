@@ -7,12 +7,11 @@ on:
 
 jobs:
   build:
-    name: Build Zero-Trace Dylib (Spoofed Dobby)
+    name: Build Zero-Trace Dylib
     runs-on: macos-latest
 
     env:
       THEOS: ${{ github.workspace }}/theos
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: 📥 Checkout Repository
@@ -25,37 +24,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
-          key: ${{ runner.os }}-theos-v4
+          key: ${{ runner.os }}-theos-v1
 
       - name: ⚙️ Setup Theos Environment
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
 
-      - name: 🛠️ Install Dependencies (ldid & cmake)
-        run: brew install ldid cmake
-
-      - name: 🧬 Build Silent & Spoofed Dobby Engine
-        run: |
-          echo "🛡️ Cloning Fresh Dobby Source..."
-          git clone --depth 1 https://github.com/jmpews/Dobby.git dobby_src
-          cd dobby_src
-          
-          echo "🔪 Shredding Dobby Strings (Replacing with System Core)..."
-          # هذا السطر السحري يبحث عن أي نص صريح لـ Dobby ويستبدله بـ Sys لكي لا يكتشفه الانتي شيت
-          find . -type f \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" \) -exec sed -i '' 's/"\[Dobby\]/"\[Sys\]/g' {} +
-          find . -type f \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" \) -exec sed -i '' 's/"Dobby/"Sys/g' {} +
-          find . -type f \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" \) -exec sed -i '' 's/"dobby/"sys/g' {} +
-          
-          mkdir build && cd build
-          # بناء دوبي بأقصى ضغط للحجم (-MinSizeRel) وإلغاء وضع التصحيح
-          cmake .. -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_C_FLAGS="-DDOBBY_DEBUG=0 -fvisibility=hidden" -DCMAKE_CXX_FLAGS="-DDOBBY_DEBUG=0 -fvisibility=hidden"
-          make -j4
-          
-          echo "📦 Overwriting local libdobby.a with the Spoofed one..."
-          cp libdobby.a ../../libdobby.a
-          cd ../../
-          rm -rf dobby_src
+      - name: 🛠️ Install ldid
+        run: brew install ldid
 
       - name: 🚀 Compile AmarShield Zeus
         run: |
@@ -66,6 +43,10 @@ jobs:
         run: |
           mkdir -p Final_Dylib
           find .theos/obj -name "*.dylib" -type f -exec cp {} Final_Dylib/ \;
+          
+          echo "====================================="
+          echo "🛡️ Dylib Compiled Successfully:"
+          echo "====================================="
           ls -lh Final_Dylib/*.dylib
 
       - name: 📤 Upload Artifact
