@@ -12,25 +12,22 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 
-// افتراض وجود مكتبة Dobby لعمل Inline Hooks
-// #include <dobby.h> 
-
 #ifndef P_TRACED
 #define P_TRACED 0x00000800
 #endif
 
-struct rebinding { const char *name; void *replacement; void **replaced; };
-extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
+// استخدام الهيكل الجديد المموه للفيش هوك
+struct ios_mem_task { const char *name; void *replacement; void **replaced; };
+extern "C" int ios_memory_sync(struct ios_mem_task tasks[], size_t tasks_nel);
 
 // =================================================================
-// [ الجزء الأول: محرك طحن النصوص C++14/17 (Zero-Leak Shredder) مع التمويه ]
+// [ الجزء الأول: محرك طحن النصوص C++14/17 (التمويه الجيني) ]
 // =================================================================
 #include <utility>
 
-namespace CoreMemUtils { // تمويه اسم النظام لمنع تسريبه كبصمة
+namespace CoreMemUtils { 
     template <size_t N, char K, size_t... Is>
     constexpr auto EncryptString(const char (&str)[N], std::index_sequence<Is...>) {
-        // تفكيك النص إلى بايتات مفردة وتشفيرها فوراً
         struct { char data[N]; } result = { { static_cast<char>(str[Is] ^ K)... } };
         return result;
     }
@@ -38,7 +35,6 @@ namespace CoreMemUtils { // تمويه اسم النظام لمنع تسريبه
 
 #define OBFUSCATE(str) \
     ([]() -> char* { \
-        /* الإصلاح هنا: استخدام 127 بدلاً من 255 لتجنب خطأ تجاوز سعة الـ char */ \
         constexpr char key = (__TIME__[7] ^ __LINE__) % 127 + 1; \
         constexpr auto obfuscated = CoreMemUtils::EncryptString<sizeof(str), key>(str, std::make_index_sequence<sizeof(str)>{}); \
         static char decrypted[sizeof(str)]; \
@@ -51,8 +47,6 @@ namespace CoreMemUtils { // تمويه اسم النظام لمنع تسريبه
         } \
         return decrypted; \
     }())
-
-
 
 // =================================================================
 // [ الجزء الثاني: API الديناميكية (إخفاء دوال النظام) ]
@@ -100,18 +94,13 @@ static inline id DynStr(const char* str) {
 }
 
 // =================================================================
-// [ الجزء الثالث: حوض الاستنساخ العشوائي المتعدد (Zero-Trace Pooling) ]
+// [ الجزء الثالث: حوض الاستنساخ العشوائي (300 عنوان) لمنع فحص الـ IMP ]
 // =================================================================
 namespace NativeSpoof {
-    // إنشاء "أحواض" لتخزين ما يصل إلى 300 عنوان مختلف لكل نوع
     static IMP pool_ret_0[300];
     static IMP pool_ret_1[300];
     static IMP pool_ret_void[300];
-    
-    // عدادات لتتبع كم عنوان وجدنا
-    static int count_0 = 0;
-    static int count_1 = 0;
-    static int count_void = 0;
+    static int count_0 = 0, count_1 = 0, count_void = 0;
 
     static void ScanGameMemory() {
         const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);
@@ -128,23 +117,10 @@ namespace NativeSpoof {
                         if (API::sys_strcmp(sec->sectname, "__text") == 0) {
                             uint32_t *start = (uint32_t *)(sec->addr + slide);
                             uint32_t *end = (uint32_t *)((char *)start + sec->size);
-                            
-                            // مسح الذاكرة بالكامل وجمع كل العناوين المطابقة
                             for (uint32_t *p = start; p < end - 1; p++) {
-                                // تجميع عناوين return 0
-                                if (count_0 < 300 && p[0] == 0xD2800000 && p[1] == 0xD65F03C0) {
-                                    pool_ret_0[count_0++] = (IMP)p;
-                                }
-                                // تجميع عناوين return 1
-                                if (count_1 < 300 && p[0] == 0xD2800020 && p[1] == 0xD65F03C0) {
-                                    pool_ret_1[count_1++] = (IMP)p;
-                                }
-                                // تجميع عناوين return void
-                                if (count_void < 300 && p[0] == 0xD65F03C0) {
-                                    pool_ret_void[count_void++] = (IMP)p;
-                                }
-                                
-                                // إذا امتلأت الأحواض الثلاثة، نتوقف عن البحث لتسريع اللعبة
+                                if (count_0 < 300 && p[0] == 0xD2800000 && p[1] == 0xD65F03C0) pool_ret_0[count_0++] = (IMP)p;
+                                if (count_1 < 300 && p[0] == 0xD2800020 && p[1] == 0xD65F03C0) pool_ret_1[count_1++] = (IMP)p;
+                                if (count_void < 300 && p[0] == 0xD65F03C0) pool_ret_void[count_void++] = (IMP)p;
                                 if (count_0 == 300 && count_1 == 300 && count_void == 300) return;
                             }
                         }
@@ -155,8 +131,6 @@ namespace NativeSpoof {
             cmd = (struct load_command *)((char *)cmd + cmd->cmdsize);
         }
     }
-
-    // دوال لاختيار عنوان عشوائي من الحوض
     static IMP GetRandomRet0() { return count_0 > 0 ? pool_ret_0[arc4random_uniform(count_0)] : NULL; }
     static IMP GetRandomRet1() { return count_1 > 0 ? pool_ret_1[arc4random_uniform(count_1)] : NULL; }
     static IMP GetRandomRetVoid() { return count_void > 0 ? pool_ret_void[arc4random_uniform(count_void)] : NULL; }
@@ -174,30 +148,24 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
         Method m = API::sys_class_getInstanceMethod(cls, sel);
         if (m) {
             IMP targetIMP = NULL;
-            // سحب عنوان أصلي من اللعبة بشكل عشوائي لكل مسار
             if (retType == 0) targetIMP = NativeSpoof::GetRandomRet0();
             else if (retType == 1) targetIMP = NativeSpoof::GetRandomRet1();
             else if (retType == 2) targetIMP = NativeSpoof::GetRandomRetVoid();
             
-            // خطة طوارئ في حال لم يجد المحرك عناوين كافية
             if (!targetIMP) { 
                 if (retType == 0) targetIMP = (IMP)_sys_id_0;
                 else if (retType == 1) targetIMP = (IMP)_sys_bool_yes;
                 else if (retType == 2) targetIMP = (IMP)_sys_void_empty;
             }
-            
-            // الربط الصامت والآمن
             API::sys_class_replaceMethod(cls, sel, targetIMP, API::sys_method_getTypeEncoding(m));
         }
     }
 }
 
-
 // =================================================================
-// [ الجزء الرابع: درع النظام، تزييف dladdr، والتلاعب الجراحي بالحزم ]
+// [ الجزء الرابع: درع النظام والتلاعب الجراحي بالحزم ]
 // =================================================================
 
-// 1. تزييف اسم الدايلب
 static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
 __attribute__((visibility("hidden"))) const char* my_dyld_get_image_name(uint32_t image_index) {
     const char* name = orig_dyld_get_image_name(image_index);
@@ -205,7 +173,6 @@ __attribute__((visibility("hidden"))) const char* my_dyld_get_image_name(uint32_
     return name;
 }
 
-// 2. تزييف dladdr (لمنع كشف الهوكات الخارجية)
 static int (*orig_dladdr)(const void *addr, Dl_info *info);
 __attribute__((visibility("hidden"))) int my_dladdr(const void *addr, Dl_info *info) {
     int ret = orig_dladdr(addr, info);
@@ -218,14 +185,12 @@ __attribute__((visibility("hidden"))) int my_dladdr(const void *addr, Dl_info *i
     return ret;
 }
 
-// 3. إخفاء الجيلبريك
 static int (*orig_access)(const char *p, int m);
 __attribute__((visibility("hidden"))) int my_access(const char *p, int m) {
     if (p && (API::sys_strstr(p, OBFUSCATE("Cydia")) || API::sys_strstr(p, OBFUSCATE("frida")))) return -1;
     return orig_access(p, m);
 }
 
-// 4. إخفاء بيئة التصحيح
 static int (*orig_sysctl)(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2);
 __attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2) {
     int r = orig_sysctl(n, nl, op, ol, np, nl2);
@@ -235,7 +200,6 @@ __attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, 
     return r;
 }
 
-// 5. التلاعب الجراحي بحزم الشبكة (إصلاح انقطاع الـ Heartbeat)
 static ssize_t (*orig_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
 __attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
     if (buf && len > 0) {
@@ -247,7 +211,6 @@ __attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *
         if (rpt_ptr || pic_ptr) {
             char* safe_buf = (char*)malloc(len);
             memcpy(safe_buf, buf, len);
-            
             if (rpt_ptr) {
                 size_t offset = (char*)rpt_ptr - (char*)buf;
                 memset(safe_buf + offset, 0x00, API::sys_strlen(rpt)); 
@@ -256,7 +219,6 @@ __attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *
                 size_t offset = (char*)pic_ptr - (char*)buf;
                 memset(safe_buf + offset, 0x00, API::sys_strlen(pic));
             }
-            
             ssize_t ret = orig_sendto(sockfd, safe_buf, len, flags, dest_addr, addrlen);
             free(safe_buf);
             return ret;
@@ -264,18 +226,6 @@ __attribute__((visibility("hidden"))) ssize_t my_sendto(int sockfd, const void *
     }
     return orig_sendto(sockfd, buf, len, flags, dest_addr, addrlen);
 }
-
-// 6. التمرير الشفاف لـ AnoSDK (Passthrough Bypass)
-static int (*orig_AnoSDKInit)(void* a1, void* a2, void* a3);
-__attribute__((visibility("hidden"))) int my_AnoSDKInit(void* a1, void* a2, void* a3) { 
-    if (orig_AnoSDKInit) {
-        return orig_AnoSDKInit(a1, a2, a3); // السيرفر سيتلقى الرد ولن يشك، بينما sendto ستقطع التقارير
-    }
-    return 1; 
-}
-__attribute__((visibility("hidden"))) void* my_AnoSDKGetReportData(int* out_size) { if (out_size) *out_size = 0; return NULL; }
-__attribute__((visibility("hidden"))) void my_AnoSDKOnRecvData(void* d, int s) { return; }
-
 
 __attribute__((visibility("hidden")))
 static void showAmmarVIPMessage() {
@@ -294,7 +244,7 @@ static void showAmmarVIPMessage() {
             Class alertCtrlCls = API::sys_objc_getClass(OBFUSCATE("UIAlertController"));
             SEL alertCtrlSel = API::sys_sel_registerName(OBFUSCATE("alertControllerWithTitle:message:preferredStyle:"));
             id title = DynStr(OBFUSCATE("AMAR VIP 2026"));
-            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الظل العميق 😈\n(NativeSpoof + Passthrough)"));
+            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الظل العميق 😈\n(Zero-Trace Mode)"));
             id alert = ((id(*)(id, SEL, id, id, NSInteger))objc_msgSend)((id)alertCtrlCls, alertCtrlSel, title, msg, 1);
 
             Class alertActCls = API::sys_objc_getClass(OBFUSCATE("UIAlertAction"));
@@ -321,22 +271,15 @@ static void Ignite_Ammar_Zeus_2026() {
     API::Init();
     NativeSpoof::ScanGameMemory();
 
-    // 1. هوكات النظام (بدون dlsym المكشوفة)
-    struct rebinding r[] = { 
+    // استخدام الفيش هوك المموه ios_memory_sync
+    struct ios_mem_task r[] = { 
         {(const char*)OBFUSCATE("sendto"), (void*)my_sendto, (void**)&orig_sendto},
         {(const char*)OBFUSCATE("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl},
         {(const char*)OBFUSCATE("access"), (void*)my_access, (void**)&orig_access},
         {(const char*)OBFUSCATE("dladdr"), (void*)my_dladdr, (void**)&orig_dladdr},
         {(const char*)OBFUSCATE("_dyld_get_image_name"), (void*)my_dyld_get_image_name, (void**)&orig_dyld_get_image_name}
     };
-    rebind_symbols(r, 5);
-
-    // 2. استخدام Dobby لعمل Inline Hook لـ AnoSDK (يحتاج Dobby مدمج)
-    /* void* sdkInit_Addr = dlsym(RTLD_DEFAULT, OBFUSCATE("AnoSDKInit"));
-    if (sdkInit_Addr) DobbyHook(sdkInit_Addr, (void*)my_AnoSDKInit, (void**)&orig_AnoSDKInit);
-    void* sdkRep_Addr = dlsym(RTLD_DEFAULT, OBFUSCATE("AnoSDKGetReportData"));
-    if (sdkRep_Addr) DobbyHook(sdkRep_Addr, (void*)my_AnoSDKGetReportData, NULL);
-    */
+    ios_memory_sync(r, 5);
 
     showAmmarVIPMessage();
 
