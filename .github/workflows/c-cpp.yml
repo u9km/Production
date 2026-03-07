@@ -1,4 +1,4 @@
-name: Production Build
+name: AmarShield Zeus - Production Build
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build AmarShield
+    name: Build Zero-Trace Dylib
     runs-on: macos-latest
 
     env:
@@ -16,42 +16,48 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: 1
 
     steps:
-      - name: Checkout Repository
+      - name: 📥 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Cache Theos
+      - name: 📦 Cache Theos
         id: cache-theos
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
-          key: ${{ runner.os }}-theos-master
+          key: ${{ runner.os }}-theos-master-v1
 
-      - name: Setup Theos
+      - name: ⚙️ Setup Theos Environment
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install ldid
+      - name: 🛠️ Install Dependencies (ldid)
         run: brew install ldid
 
-      - name: Build Tweak
+      - name: 🚀 Compile AmarShield Zeus (Release Mode)
         run: |
+          echo "Starting Sovereign Build with Final Package Flags..."
           make clean
           make package FINALPACKAGE=1
         
-      # هذه الخطوة الجديدة تسحب الدايلب فقط وتضعه في مجلد مؤقت مسطح بدون مسارات
-      - name: Extract Dylib Only
+      - name: 🕵️‍♂️ Extract & Verify Stripped Dylib
         run: |
           mkdir -p Final_Dylib
+          # البحث عن ملف الدايلب ونقله
           find .theos/obj -name "*.dylib" -type f -exec cp {} Final_Dylib/ \;
+          
+          echo "====================================="
+          echo "🛡️ Dylib Compilation Status:"
+          echo "====================================="
+          # طباعة معلومات الملف للتأكد من أنه تم طحنه (Stripped) بنجاح
+          ls -lh Final_Dylib/*.dylib
+          file Final_Dylib/*.dylib
 
-      # رفع الملف المباشر بدون أي مجلدات زائدة
-      - name: Upload Artifact
+      - name: 📤 Upload Artifact (Dylib Only)
         uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-Dylib
+          name: AmarShield-Zeus-2026-Dylib
           path: Final_Dylib/*.dylib
+          if-no-files-found: error
