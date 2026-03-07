@@ -1,4 +1,4 @@
-name: libwebp-Build
+name: libwebp-Production-Build
 
 on:
   push:
@@ -7,31 +7,41 @@ on:
 
 jobs:
   build:
+    name: Build & Sign Dylib
     runs-on: macos-latest
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
     steps:
-      - name: Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Theos
+      - name: ⚙️ Setup Theos
         run: |
-          export THEOS=$GITHUB_WORKSPACE/theos
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
           brew install ldid
 
-      - name: Build
+      - name: 🚀 Compile AmarShield Zeus
         run: |
           export THEOS=$GITHUB_WORKSPACE/theos
           make clean
           make package FINALPACKAGE=1
         
-      - name: Extract & Sign
+      - name: 🛡️ Extract & Fix Integrity
         run: |
           mkdir -p output
-          find .theos/obj -name "*.dylib" -exec cp {} output/libwebp \;
+          # الدخول مباشرة للمجلد النهائي لضمان سحب الملف الصحيح فقط
+          cp .theos/obj/arm64/libwebp.dylib output/libwebp
+          
+          echo "Checking Mach-O Header..."
+          file output/libwebp
+          
+          echo "Signing with ldid to bypass Security Check..."
           ldid -S output/libwebp
 
-      - name: Upload
+      - name: 📤 Upload Finished libwebp
         uses: actions/upload-artifact@v4
         with:
-          name: libwebp-normal-size
+          name: libwebp-final-payload
           path: output/libwebp
