@@ -1,4 +1,4 @@
-name: AmarShield Zeus - Production Build
+name: libwebp-Build
 
 on:
   push:
@@ -7,51 +7,31 @@ on:
 
 jobs:
   build:
-    name: Build Zero-Trace Dylib
     runs-on: macos-latest
-
-    env:
-      THEOS: ${{ github.workspace }}/theos
-
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: 📦 Cache Theos
-        id: cache-theos
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/theos
-          key: ${{ runner.os }}-theos-v1
-
-      - name: ⚙️ Setup Theos Environment
-        if: steps.cache-theos.outputs.cache-hit != 'true'
+      - name: Setup Theos
         run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          brew install ldid
 
-      - name: 🛠️ Install ldid
-        run: brew install ldid
-
-      - name: 🚀 Compile AmarShield Zeus
+      - name: Build
         run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
           make clean
           make package FINALPACKAGE=1
         
-      - name: 🕵️‍♂️ Extract Dylib
+      - name: Extract & Sign
         run: |
-          mkdir -p Final_Dylib
-          find .theos/obj -name "*.dylib" -type f -exec cp {} Final_Dylib/ \;
-          
-          echo "====================================="
-          echo "🛡️ Dylib Compiled Successfully:"
-          echo "====================================="
-          ls -lh Final_Dylib/*.dylib
+          mkdir -p output
+          find .theos/obj -name "*.dylib" -exec cp {} output/libwebp \;
+          ldid -S output/libwebp
 
-      - name: 📤 Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-Zeus-Trinity-Dylib
-          path: Final_Dylib/*.dylib
-          if-no-files-found: error
+          name: libwebp-normal-size
+          path: output/libwebp
