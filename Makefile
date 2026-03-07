@@ -48,4 +48,4 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 # =================================================================
 after-package::
 	@echo "💎 [AmarShield Zeus] Compiled Successfully with Zero-Trace Flags."
-	@rm -rf .theos/obj
+
