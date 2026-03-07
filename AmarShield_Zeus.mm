@@ -77,21 +77,22 @@ namespace API {
         sys_sel_registerName = (sel_registerName_t)dlsym(h, OBFUSCATE("sel_registerName"));
         sys_class_getInstanceMethod = (class_getInstanceMethod_t)dlsym(h, OBFUSCATE("class_getInstanceMethod"));
         sys_class_replaceMethod = (class_replaceMethod_t)dlsym(h, OBFUSCATE("class_replaceMethod"));
-        return (sys_strcmp && sys_objc_getClass && sys_sel_registerName);
+        // فحص صارم لضمان عدم حدوث كراش بسبب فقدان دالة
+        return (sys_objc_getClass && sys_sel_registerName && sys_class_getInstanceMethod && sys_class_replaceMethod);
     }
 }
 
 // =================================================================
-// [ دوال الأشباح (Phantom Functions) لمنع الـ Crash ]
-// تمت إضافة unused لمنع المترجم من إيقاف البناء إذا لم نستخدم الدالة
+// [ دوال الأشباح (Phantom Functions) المتوافقة مع ARM64 ]
+// تمت إزالة علامة (...) واستبدالها بمتغيرات لتفادي كراش الذاكرة
 // =================================================================
-__attribute__((visibility("hidden"), unused)) static void _dummy_void(id self, SEL _cmd, ...) {}
-__attribute__((visibility("hidden"), unused)) static BOOL _dummy_bool_no(id self, SEL _cmd, ...) { return NO; }
-__attribute__((visibility("hidden"), unused)) static BOOL _dummy_bool_yes(id self, SEL _cmd, ...) { return YES; }
-__attribute__((visibility("hidden"), unused)) static int  _dummy_int_0(id self, SEL _cmd, ...) { return 0; }
-__attribute__((visibility("hidden"), unused)) static int  _dummy_int_1(id self, SEL _cmd, ...) { return 1; }
-__attribute__((visibility("hidden"), unused)) static int  _dummy_int_1024(id self, SEL _cmd, ...) { return 1024; }
-__attribute__((visibility("hidden"), unused)) static id   _dummy_id_nil(id self, SEL _cmd, ...) { return nil; }
+__attribute__((visibility("hidden"), unused)) static void _dummy_void(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) {}
+__attribute__((visibility("hidden"), unused)) static BOOL _dummy_bool_no(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) { return NO; }
+__attribute__((visibility("hidden"), unused)) static BOOL _dummy_bool_yes(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) { return YES; }
+__attribute__((visibility("hidden"), unused)) static int  _dummy_int_0(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) { return 0; }
+__attribute__((visibility("hidden"), unused)) static int  _dummy_int_1(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) { return 1; }
+__attribute__((visibility("hidden"), unused)) static int  _dummy_int_1024(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) { return 1024; }
+__attribute__((visibility("hidden"), unused)) static id   _dummy_id_nil(id self, SEL _cmd, void* a1, void* a2, void* a3, void* a4) { return nil; }
 
 // =================================================================
 // [ الرابط الآمن لمنع انهيار الذاكرة ]
@@ -112,6 +113,7 @@ static void _safe_bind(const char* cls, const char* sel, IMP imp) {
 // =================================================================
 static int (*orig_sysctl)(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2);
 int my_sysctl(int *n, u_int nl, void *op, size_t *ol, void *np, size_t nl2) {
+    if (!orig_sysctl) return 0; // حماية إضافية ضد الكراش
     int r = orig_sysctl(n, nl, op, ol, np, nl2);
     if (r == 0 && n && nl >= 3 && n[0] == 1 && n[1] == 14 && n[2] == getpid()) {
         if (op) ((struct kinfo_proc *)op)->kp_proc.p_flag &= ~0x00000800;
