@@ -1,21 +1,50 @@
-TARGET := iphone:clang:latest:14.0
-ARCHS = arm64
+# =================================================================
+# [ إعدادات البيئة والتجميع الصارم (Release Mode) ]
+# =================================================================
+# إجبار Theos على بناء نسخة نهائية خالية من أي سجلات تتبع أو Debug
 DEBUG = 0
 FINALPACKAGE = 1
 
+# تحديد المعمارية (arm64 للأجهزة الحديثة) وإصدار النظام
+ARCHS = arm64
+TARGET := iphone:clang:latest:14.0
+
+# =================================================================
+# [ إعدادات المشروع ]
+# =================================================================
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = AmarShield
+TWEAK_NAME = AmarShield_Zeus
+AmarShield_Zeus_FILES = AmarShield_Zeus.mm
 
-# أسماء الملفات التي سيتم تجميعها
-AmarShield_FILES = AmarShield_Zeus.mm fishhook.c
+# =================================================================
+# [ أعلام المترجم (Compiler Flags) - التدمير الشامل للرموز ]
+# =================================================================
+# -fvisibility=hidden: إخفاء جميع أسماء الدوال من جدول الرموز (Symbol Table).
+# -O3: أقصى درجة من تسريع الكود لضمان عدم حدوث تقطيع (Lag) في اللعبة.
+# -fobjc-arc: الإدارة التلقائية للذاكرة لمنع الكراشات.
 
-# المكاتب التي أضفناها لمنع الكراش (تم إضافة AdSupport لتجميد البصمة)
-AmarShield_FRAMEWORKS = Foundation UIKit CoreGraphics QuartzCore Security AdSupport
+AmarShield_Zeus_CFLAGS = -fobjc-arc -fvisibility=hidden -O3
 
-# إعدادات المترجم
-AmarShield_CFLAGS = -fobjc-arc
-# تم التحديث لدعم أحدث تقنيات C++20 مع تفعيل تحسينات الأداء (-O2) لتسريع التشفير
-AmarShield_CCFLAGS = -std=c++20 -O2
+# -std=c++14: إجباري لتشغيل محرك تشفير LCG المتدحرج الذي كتبناه.
+# -fno-rtti -fno-exceptions: إغلاق ميزات C++ التي تترك بصمات في الذاكرة الحية.
 
+AmarShield_Zeus_CXXFLAGS = -fobjc-arc -fvisibility=hidden -fno-rtti -fno-exceptions -O3 -std=c++14
+
+# =================================================================
+# [ أعلام الرابط (Linker Flags) - طحن البقايا ]
+# =================================================================
+# -Wl,-x: أمر صارم للرابط (Linker) بحذف جميع الرموز المحلية (Local Symbols) من الدايلب.
+# -dead_strip: إزالة أي كود برمجي غير مستخدم لتقليل حجم الملف وتقليل مساحة الفحص.
+
+AmarShield_Zeus_LDFLAGS = -Wl,-x -dead_strip
+
+# تضمين إعدادات بناء التويك
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+# =================================================================
+# [ أوامر التنظيف التلقائي بعد التجميع ]
+# =================================================================
+after-package::
+	@echo "💎 [AmarShield Zeus] Compiled Successfully with Zero-Trace Flags."
+	@rm -rf .theos/obj
