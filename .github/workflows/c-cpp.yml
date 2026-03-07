@@ -21,7 +21,6 @@ jobs:
         with:
           submodules: recursive
 
-      # تم تغيير اسم الكاش لإجبار السيرفر على تحميل بيئة نظيفة 100%
       - name: 📦 Cache Theos
         id: cache-theos
         uses: actions/cache@v4
@@ -48,17 +47,14 @@ jobs:
           make clean
           make package FINALPACKAGE=1
         
-      - name: 🕵️‍♂️ Extract & FORCE STRIP Dylib
+      - name: 🕵️‍♂️ Extract Dylib
         run: |
           mkdir -p Final_Dylib
           find .theos/obj -name "*.dylib" -type f -exec cp {} Final_Dylib/ \;
           
           echo "====================================="
-          echo "🛡️ Executing Military Strip (Force Remove All Symbols)..."
-          # أداة strip من أبل لمسح كل شيء بالقوة
-          strip -x Final_Dylib/*.dylib
+          echo "🛡️ Dylib Compilation Status:"
           echo "====================================="
-          
           ls -lh Final_Dylib/*.dylib
           file Final_Dylib/*.dylib
 
