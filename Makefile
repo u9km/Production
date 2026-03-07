@@ -15,7 +15,8 @@ TARGET := iphone:clang:latest:14.0
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AmarShield_Zeus
-AmarShield_Zeus_FILES = AmarShield_Zeus.mm
+AmarShield_Zeus_FILES = AmarShield_Zeus.mm fishhook.c
+
 
 # =================================================================
 # [ أعلام المترجم (Compiler Flags) - التدمير الشامل للرموز ]
