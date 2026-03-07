@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build Zero-Trace Dylib
+    name: Build Zero-Trace Dylib (Trinity Protocol)
     runs-on: macos-latest
 
     env:
@@ -26,23 +26,37 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/theos
-          key: ${{ runner.os }}-theos-master-v2
+          key: ${{ runner.os }}-theos-trinity-v1
 
       - name: ⚙️ Setup Theos Environment
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
 
-      - name: 🛠️ Install Dependencies (ldid)
-        run: brew install ldid
+      - name: 🛠️ Install Dependencies (ldid & cmake)
+        run: brew install ldid cmake
 
-      - name: 🔍 Verify Source Code (Anti-Cache Check)
+      - name: 🧬 Compile & Inject Dobby Engine
         run: |
-          echo "Checking if the code is the NEW Camouflaged version..."
-          cat AmarShield_Zeus.mm | grep "CoreMemUtils" || (echo "❌ OLD CODE DETECTED! GitHub didn't sync!" && exit 1)
-          echo "✅ New Code Confirmed."
+          if [ ! -f "$THEOS/lib/libdobby.a" ]; then
+            echo "🛡️ Fetching Dobby Source..."
+            git clone --depth 1 https://github.com/jmpews/Dobby.git dobby_src
+            cd dobby_src
+            mkdir build && cd build
+            echo "⚙️ Compiling Dobby for iOS (ARM64)..."
+            cmake .. -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            make -j4
+            echo "📦 Moving Dobby to Theos..."
+            cp libdobby.a $THEOS/lib/
+            cp ../include/dobby.h $THEOS/include/
+            cd ../../
+            rm -rf dobby_src
+            echo "✅ Dobby Engine Installed Successfully!"
+          else
+            echo "⚡ Dobby is already cached in Theos."
+          fi
 
-      - name: 🚀 Compile AmarShield Zeus (Release Mode)
+      - name: 🚀 Compile AmarShield Zeus (Trinity Mode)
         run: |
           make clean
           make package FINALPACKAGE=1
@@ -56,11 +70,10 @@ jobs:
           echo "🛡️ Dylib Compilation Status:"
           echo "====================================="
           ls -lh Final_Dylib/*.dylib
-          file Final_Dylib/*.dylib
 
       - name: 📤 Upload Artifact (Dylib Only)
         uses: actions/upload-artifact@v4
         with:
-          name: AmarShield-Zeus-2026-Dylib
+          name: AmarShield-Zeus-Trinity-Dylib
           path: Final_Dylib/*.dylib
           if-no-files-found: error
