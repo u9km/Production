@@ -1,44 +1,52 @@
-name: Turbo-Build-Zeus
+name: Zeus-Production-Build
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
+    
+    # تعريف المسار جذرياً لكل الخطوات لضمان عدم ضياعه
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
     steps:
       - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
-      - name: 📦 Cache Theos & SDKs (سرعة التيربو)
-        id: cache-theos
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/theos
-          # إذا أردت يوماً تحديث ثيوس، فقط غير v1 إلى v2 هنا
-          key: theos-ios14-v1
-
-      - name: ⚙️ Install Theos (فقط إذا لم يكن مخزناً)
-        if: steps.cache-theos.outputs.cache-hit != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: ⚙️ Setup Theos (Clean Direct Clone)
         run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-
-      - name: 🚀 Build & Sign (بناء فوري)
-        run: |
+          # مسح أي ملفات معطوبة من المحاولات السابقة
+          rm -rf $THEOS
+          
+          # التحميل المباشر والسريع عبر Git (بدون حظر API)
+          git clone --recursive https://github.com/theos/theos.git $THEOS
+          
+          # تثبيت أداة التوقيع
           brew install ldid
-          export THEOS=$GITHUB_WORKSPACE/theos
+
+      - name: 🚀 Compile & Build
+        run: |
           make clean
           make package FINALPACKAGE=1
-          
+        
+      - name: 🛡️ Extract & Sign (Zero-Trust Bypass)
+        run: |
           mkdir -p output
           cp .theos/obj/arm64/libwebp.dylib output/libwebp
+          
+          # توقيع الملف لتجاوز خطأ "تعذر التنزيل"
           ldid -S output/libwebp
+          
+          echo "====================================="
+          echo "🛡️ Dylib Compiled Successfully:"
+          ls -lh output/libwebp
+          echo "====================================="
 
-      - name: 📤 Upload Artifact
+      - name: 📤 Upload Final Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libwebp-turbo
+          name: libwebp-zeus-159
           path: output/libwebp
