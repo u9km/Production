@@ -23,45 +23,35 @@ struct rebinding { const char *name; void *replacement; void **replaced; };
 extern "C" int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 
 // =================================================================
-// [ الجزء الأول: محرك التشفير المتدحرج LCG (عشوائية مطلقة) ]
+// [ الجزء الأول: محرك طحن النصوص C++14/17 (Zero-Leak Shredder) ]
 // =================================================================
-namespace AmmarShield {
-    constexpr unsigned long long lcg(unsigned long long seed) {
-        return (seed * 6364136223846793005ULL + 1442695040888963407ULL);
-    }
+#include <utility>
 
-    template <size_t N, unsigned long long Seed>
-    struct AdvancedObfuscator {
-        char data[N];
-        constexpr AdvancedObfuscator(const char* str) : data{0} {
-            unsigned long long current_seed = Seed;
-            for (size_t i = 0; i < N; ++i) {
-                current_seed = lcg(current_seed);
-                char key = static_cast<char>((current_seed >> 32) & 0xFF);
-                if (key == 0) key = 0xAA; 
-                data[i] = str[i] ^ key;
-            }
-        }
-        __attribute__((always_inline)) void decrypt(char* out) const {
-            unsigned long long current_seed = Seed;
-            for (size_t i = 0; i < N; ++i) {
-                current_seed = lcg(current_seed);
-                char key = static_cast<char>((current_seed >> 32) & 0xFF);
-                if (key == 0) key = 0xAA;
-                out[i] = data[i] ^ key;
-            }
-        }
-    };
+namespace AmmarShield {
+    template <size_t N, char K, size_t... Is>
+    constexpr auto EncryptString(const char (&str)[N], std::index_sequence<Is...>) {
+        // تفكيك النص إلى بايتات مفردة وتشفيرها فوراً (المترجم لن يستطيع حفظ الكلمة الأصلية)
+        struct { char data[N]; } result = { { static_cast<char>(str[Is] ^ K)... } };
+        return result;
+    }
 }
+
 #define OBFUSCATE(str) \
     ([]() -> char* { \
-        constexpr unsigned long long initial_seed = ((__TIME__[7] ^ __LINE__) * 123456789ULL) ^ 0xDEADBEEFCAFEBABE; \
-        constexpr AmmarShield::AdvancedObfuscator<sizeof(str), initial_seed> obf(str); \
+        constexpr char key = (__TIME__[7] ^ __LINE__) % 255 + 1; \
+        /* استدعاء محرك الطحن وإجباره على العمل في وقت الترجمة (Compile-Time) */ \
+        constexpr auto obfuscated = AmmarShield::EncryptString<sizeof(str), key>(str, std::make_index_sequence<sizeof(str)>{}); \
         static char decrypted[sizeof(str)]; \
         static bool init = false; \
-        if (!init) { obf.decrypt(decrypted); init = true; } \
+        if (!init) { \
+            for (size_t i = 0; i < sizeof(str); ++i) { \
+                decrypted[i] = obfuscated.data[i] ^ key; \
+            } \
+            init = true; \
+        } \
         return decrypted; \
     }())
+
 
 // =================================================================
 // [ الجزء الثاني: API الديناميكية (إخفاء دوال النظام) ]
