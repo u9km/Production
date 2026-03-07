@@ -10,11 +10,14 @@
 #include <dlfcn.h>
 #include <math.h>
 #include <string.h>
+#include <vector>
+#include <random>
+#include <chrono>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 
 // =================================================================
-// [ الضربة القاضية: الاستدعاء الخارجي لدالة Dobby بدون الحاجة لملف الهيدر ]
+// [ الاستدعاء الخارجي لدالة Dobby بدون الحاجة لملف الهيدر ]
 // =================================================================
 extern "C" {
     int DobbyHook(void *address, void *replace_call, void **origin_call);
@@ -47,6 +50,80 @@ namespace CoreMemUtils {
         } \
         return decrypted; \
     }())
+
+// =================================================================
+// [ محرك السلوك البشري (Telemetry ML Evasion Engine) ]
+// =================================================================
+struct Vector2D { float x, y; };
+
+class AmmarTelemetrySpoofer {
+private:
+    std::mt19937 rng;
+
+    float GenerateGaussianNoise(float mean, float stddev) {
+        std::normal_distribution<float> dist(mean, stddev);
+        return dist(rng);
+    }
+
+    float CalculateFittsTime(Vector2D start, Vector2D target, float target_width) {
+        float distance = std::hypot(target.x - start.x, target.y - start.y);
+        float a = 0.1f; 
+        float b = 0.2f; 
+        return a + b * std::log2(1.0f + (distance / target_width));
+    }
+
+    Vector2D CubicBezier(Vector2D p0, Vector2D p1, Vector2D p2, Vector2D p3, float t) {
+        float u = 1.0f - t;
+        float tt = t * t;
+        float uu = u * u;
+        float uuu = uu * u;
+        float ttt = tt * t;
+        Vector2D p;
+        p.x = uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x;
+        p.y = uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y;
+        return p;
+    }
+
+public:
+    AmmarTelemetrySpoofer() {
+        rng.seed(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    }
+
+    std::vector<Vector2D> GenerateHumanizedPath(Vector2D current_pos, Vector2D target_pos, float target_width) {
+        std::vector<Vector2D> human_path;
+        float human_time_seconds = CalculateFittsTime(current_pos, target_pos, target_width);
+        int total_steps = static_cast<int>(human_time_seconds * 60.0f); 
+        if (total_steps < 5) total_steps = 5;
+
+        Vector2D control1 = {
+            current_pos.x + (target_pos.x - current_pos.x) * 0.3f + GenerateGaussianNoise(0, 15.0f),
+            current_pos.y + (target_pos.y - current_pos.y) * 0.3f + GenerateGaussianNoise(0, 15.0f)
+        };
+        Vector2D control2 = {
+            current_pos.x + (target_pos.x - current_pos.x) * 0.7f + GenerateGaussianNoise(0, 10.0f),
+            current_pos.y + (target_pos.y - current_pos.y) * 0.7f + GenerateGaussianNoise(0, 10.0f)
+        };
+
+        Vector2D perceived_target = {
+            target_pos.x + GenerateGaussianNoise(0, target_width * 0.15f),
+            target_pos.y + GenerateGaussianNoise(0, target_width * 0.15f)
+        };
+
+        for (int i = 0; i <= total_steps; ++i) {
+            float t = static_cast<float>(i) / static_cast<float>(total_steps);
+            float ease_t = t * t * (3.0f - 2.0f * t); 
+            Vector2D step_pos = CubicBezier(current_pos, control1, control2, perceived_target, ease_t);
+            step_pos.x += GenerateGaussianNoise(0, 0.5f);
+            step_pos.y += GenerateGaussianNoise(0, 0.5f);
+            human_path.push_back(step_pos);
+        }
+        human_path.push_back(target_pos);
+        return human_path;
+    }
+};
+
+// كائن عالمي لمحرك السلوك لاستخدامه في الهوكات
+AmmarTelemetrySpoofer* GlobalSpoofer = nullptr;
 
 // =================================================================
 // [ واجهة API الديناميكية المخفية ]
@@ -139,7 +216,7 @@ namespace NativeSpoof {
 }
 
 // =================================================================
-// [ التقنية الثانية: VMT / Obj-C Phantom Swizzling ]
+// [ VMT / Obj-C Phantom Swizzling ]
 // =================================================================
 __attribute__((visibility("hidden"))) id _sys_id_0(id self, SEL _cmd, ...) { return 0; }
 __attribute__((visibility("hidden"))) BOOL _sys_bool_yes(id self, SEL _cmd, ...) { return YES; }
@@ -163,26 +240,6 @@ static void _sys_bind_native(const char* className, const char* selectorName, in
                 else if (retType == 2) targetIMP = (IMP)_sys_void_empty;
             }
             API::sys_class_replaceMethod(cls, sel, targetIMP, API::sys_method_getTypeEncoding(m));
-        }
-    }
-}
-
-// =================================================================
-// [ التقنية الثالثة: محرك HWBP (Hardware Breakpoints) ]
-// =================================================================
-namespace HWBP_Engine {
-    static void SetupHardwareBreakpoints() {
-        thread_act_array_t threads;
-        mach_msg_type_number_t thread_count;
-        if (task_threads(mach_task_self(), &threads, &thread_count) == KERN_SUCCESS) {
-            for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
-                arm_debug_state64_t debug_state;
-                mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
-                memset(&debug_state, 0, sizeof(debug_state)); 
-                thread_set_state(threads[i], ARM_DEBUG_STATE64, (thread_state_t)&debug_state, count);
-                mach_port_deallocate(mach_task_self(), threads[i]);
-            }
-            vm_deallocate(mach_task_self(), (vm_address_t)threads, thread_count * sizeof(thread_act_t));
         }
     }
 }
@@ -216,6 +273,31 @@ __attribute__((visibility("hidden"))) int my_sysctl(int *n, u_int nl, void *op, 
 }
 
 // =================================================================
+// [ دمج محرك الإنتروبيا في هوك افتراضي للإدخال (مثال جاهز) ]
+// =================================================================
+// هذا مجرد نموذج لكيفية دمج الـ Spoofer في דالة اللمس أو الكاميرا
+static void (*orig_UpdateCameraRotation)(void* player_controller, float pitch, float yaw);
+__attribute__((visibility("hidden"))) void my_UpdateCameraRotation(void* player_controller, float pitch, float yaw) {
+    if (GlobalSpoofer) {
+        // افتراض: جلب الإحداثيات الحالية من محرك اللعبة
+        Vector2D currentAim = {0.0f, 0.0f}; // استبدلها بجلب القيم الحقيقية
+        Vector2D targetAim = {pitch, yaw};  
+        
+        // تمرير الهدف لمحرك السلوك البشري لتوليد مسار مموه
+        std::vector<Vector2D> safePath = GlobalSpoofer->GenerateHumanizedPath(currentAim, targetAim, 50.0f);
+        
+        // تنفيذ الإحداثيات البشرية بالتدريج (يمكن معالجتها على مستوى الفريمات)
+        if (!safePath.empty()) {
+            Vector2D finalSafeAim = safePath.back();
+            orig_UpdateCameraRotation(player_controller, finalSafeAim.x, finalSafeAim.y);
+            return;
+        }
+    }
+    orig_UpdateCameraRotation(player_controller, pitch, yaw);
+}
+
+
+// =================================================================
 // [ واجهة المستخدم: رسالة الثالوث المحرم (Trinity Protocol) ]
 // =================================================================
 __attribute__((visibility("hidden")))
@@ -235,7 +317,7 @@ static void showAmmarVIPMessage() {
             Class alertCtrlCls = API::sys_objc_getClass(OBFUSCATE("UIAlertController"));
             SEL alertCtrlSel = API::sys_sel_registerName(OBFUSCATE("alertControllerWithTitle:message:preferredStyle:"));
             id title = DynStr(OBFUSCATE("⚡ 𝗔𝗠𝗠𝗔𝗥 𝗭𝗘𝗨𝗦 𝟮𝟬𝟮𝟲 ⚡"));
-            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الثالوث المحرم بنجاح 💀\n\n[✓] Dobby Inline Injector\n[✓] Phantom VMT Swizzle\n[✓] HWBP Evasion Active\n\n🛡️ Zero-Fishhook Engine 🛡️"));
+            id msg = DynStr(OBFUSCATE("تم تفعيل بروتوكول الثالوث المعماري بنجاح 💀\n\n[✓] Dobby Inline Injector\n[✓] Phantom VMT Swizzle\n[✓] ML Telemetry Spoofer Active\n\n🛡️ Zero-Trust Override 🛡️"));
             id alert = ((id(*)(id, SEL, id, id, NSInteger))objc_msgSend)((id)alertCtrlCls, alertCtrlSel, title, msg, 1);
 
             Class alertActCls = API::sys_objc_getClass(OBFUSCATE("UIAlertAction"));
@@ -261,7 +343,9 @@ static void Ignite_Ammar_Zeus_2026() {
     
     API::Init();
     NativeSpoof::ScanGameMemory();
-    HWBP_Engine::SetupHardwareBreakpoints(); 
+    
+    // تفعيل محرك الإنتروبيا العالمي
+    GlobalSpoofer = new AmmarTelemetrySpoofer();
 
     // -------------------------------------------------------------
     // استخدام Dobby لعمل Inline Hooks للدوال الحساسة
