@@ -27,6 +27,26 @@ jobs:
           # تثبيت أداة التوقيع
           brew install ldid
 
+      - name: 🩹 Fix Missing Headers (ptrace.h)
+        run: |
+          # إنشاء مجلد sys داخل مسار include الخاص بـ Theos
+          mkdir -p $THEOS/include/sys
+          
+          # كتابة ملف ptrace.h وتضمين الدوال المطلوبة للحماية وتجاوز التصحيح
+          cat << 'EOF' > $THEOS/include/sys/ptrace.h
+          #ifndef _SYS_PTRACE_H_
+          #define _SYS_PTRACE_H_
+          #include <sys/types.h>
+          
+          #define PT_TRACE_ME 0
+          #define PT_DENY_ATTACH 31
+          #define PT_ATTACH 16
+          #define PT_DETACH 17
+          
+          extern "C" int ptrace(int request, pid_t pid, caddr_t addr, int data);
+          #endif
+          EOF
+
       - name: 🚀 Compile & Build
         run: |
           make clean
