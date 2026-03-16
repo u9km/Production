@@ -8,7 +8,6 @@ jobs:
   build:
     runs-on: macos-latest
     
-    # تعريف المسار جذرياً لكل الخطوات لضمان عدم ضياعه
     env:
       THEOS: ${{ github.workspace }}/theos
 
@@ -18,21 +17,13 @@ jobs:
 
       - name: ⚙️ Setup Theos (Clean Direct Clone)
         run: |
-          # مسح أي ملفات معطوبة من المحاولات السابقة
           rm -rf $THEOS
-          
-          # التحميل المباشر والسريع عبر Git (بدون حظر API)
           git clone --recursive https://github.com/theos/theos.git $THEOS
-          
-          # تثبيت أداة التوقيع
           brew install ldid
 
       - name: 🩹 Fix Missing Headers (ptrace.h)
         run: |
-          # إنشاء مجلد sys داخل مسار include الخاص بـ Theos
           mkdir -p $THEOS/include/sys
-          
-          # كتابة ملف ptrace.h وتضمين الدوال المطلوبة للحماية وتجاوز التصحيح
           cat << 'EOF' > $THEOS/include/sys/ptrace.h
           #ifndef _SYS_PTRACE_H_
           #define _SYS_PTRACE_H_
@@ -47,6 +38,14 @@ jobs:
           #endif
           EOF
 
+      - name: 🔐 Fix OpenSSL Missing Headers
+        run: |
+          # تثبيت OpenSSL عبر Homebrew في سيرفر البناء
+          brew install openssl@3
+          
+          # نسخ مجلد الترويسات بالكامل إلى مسار Theos ليتعرف عليها الكود
+          cp -R $(brew --prefix openssl@3)/include/openssl $THEOS/include/
+
       - name: 🚀 Compile & Build
         run: |
           make clean
@@ -57,7 +56,6 @@ jobs:
           mkdir -p output
           cp .theos/obj/arm64/libwebp.dylib output/libwebp
           
-          # توقيع الملف لتجاوز خطأ "تعذر التنزيل"
           ldid -S output/libwebp
           
           echo "====================================="
