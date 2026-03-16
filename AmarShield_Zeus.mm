@@ -1,32 +1,42 @@
+// ============================================================================
+// [0] System Headers (Ordered correctly to prevent C++ module errors)
+// ============================================================================
 #include <stdio.h>
+#include <stdarg.h>      // تمت الإضافة لدعم va_list في دالة hooked_printf
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdint.h>      // تمت الإضافة لمنع تضارب Dobby
+#include <pthread.h>     // تمت الإضافة لمنع تضارب OpenSSL
+#include <sys/types.h>   // تم النقل للأعلى لمنع تضارب C++
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/ptrace.h>
+#include <sys/utsname.h> // تمت الإضافة لحل خطأ struct utsname
+#include <sys/param.h>
+#include <sys/mount.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <TargetConditionals.h>
-#include <sys/param.h>
-#include <sys/mount.h>
-#include <CommonCrypto/CommonCryptor.h>
-#include <Security/Security.h>
-#include <Security/SecKey.h>
-#include <openssl/rsa.h>
-#include <openssl/x509.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/ssl.h>
 #include <time.h>
 
+// Apple Frameworks
 #if TARGET_OS_IPHONE
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <LocalAuthentication/LocalAuthentication.h>
 #endif
+#include <CommonCrypto/CommonCryptor.h>
+#include <Security/Security.h>
+#include <Security/SecKey.h>
 
+// External Libraries (OpenSSL & Dobby MUST be at the end)
+#include <openssl/rsa.h>
+#include <openssl/x509.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
 #include "dobby.h"
 
 // ============================================================================
@@ -359,7 +369,7 @@ void hook_all_functions() {
     // CommonCrypto
     stealth_hook("PPPelcg", (void*)my_CCCrypt, (void**)&orig_CCCrypt);
 
-    // OpenSSL (قد لا تكون موجودة، نستخدم stealth_hook ولكن نتأكد)
+    // OpenSSL
     stealth_hook("ENF_irevsl", (void*)my_RSA_verify, (void**)&orig_RSA_verify);
     stealth_hook("ENF_fvta", (void*)my_RSA_sign, (void**)&orig_RSA_sign);
     stealth_hook("RUC_XRL_irevsl", (void*)my_EVP_PKEY_verify, (void**)&orig_EVP_PKEY_verify);
@@ -544,11 +554,13 @@ int is_debugserver_installed() {
 int check_provisioning() {
     junk_code();
     FILE *fp = NULL;
-    char *provisionPath = NULL;
     uint32_t size = 0;
+    
+    // تم إصلاح خطأ المصفوفة متغيرة الحجم (VLA) والتحويل الآمن للذاكرة
     _NSGetExecutablePath(NULL, &size);
-    char execPath[size];
+    char *execPath = (char *)malloc(size); 
     _NSGetExecutablePath(execPath, &size);
+    
     char *lastSlash = strrchr(execPath, '/');
     if (lastSlash) {
         *lastSlash = '\0';
@@ -556,12 +568,16 @@ int check_provisioning() {
         snprintf(path, sizeof(path), "%s/embedded.mobileprovision", execPath);
         fp = fopen(path, "r");
     }
+    free(execPath); // تنظيف الذاكرة بعد الاستخدام
+    
     if (!fp) return 0;
     
     fseek(fp, 0, SEEK_END);
     long len = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    char *data = malloc(len + 1);
+    
+    // تم إصلاح خطأ تصريح تحويل نوع الذاكرة (Casting)
+    char *data = (char *)malloc(len + 1);
     fread(data, 1, len, fp);
     fclose(fp);
     data[len] = '\0';
@@ -675,18 +691,26 @@ void perform_security_checks() {
     
     if (threat_level > 50) {
         printf("[Security] Threat level high (%d). Exiting.\n", threat_level);
-        // تأخير عشوائي قبل الخروج لتعطيل التحليل
         usleep(rand() % 100000);
         _exit(1);
     } else if (threat_level > 20) {
         printf("[Security] Threat level medium (%d). Some hooks may be disabled.\n", threat_level);
-        // يمكن تقييد بعض الهوكات فقط
     }
 }
 
 // ============================================================================
 // [10] Initialization
 // ============================================================================
+
+// تمت إضافة تعريف الدالة المفقودة (hooked_printf) لكي لا يتعطل DobbyHook
+static int hooked_printf(const char * restrict format, ...) {
+    va_list args;
+    va_start(args, format);
+    int ret = vprintf(format, args); // تمرير الطباعة بشكل طبيعي
+    va_end(args);
+    return ret;
+}
+
 __attribute__((constructor))
 void init_hook() {
     srand((unsigned int)time(NULL));
