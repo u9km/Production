@@ -1,13 +1,13 @@
 // ============================================================================
-// [0] System Headers
+// [0] System Headers (Zero Dobby Dependency)
 // ============================================================================
 #include <stdio.h>
-#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -17,6 +17,10 @@
 #include <sys/mount.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <mach/task.h>
+#include <mach/mach_port.h>
+#include <mach/thread_act.h>
+#include <mach/thread_status.h>
 #include <mach-o/dyld.h>
 #include <TargetConditionals.h>
 
@@ -31,142 +35,175 @@
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmodule-import-in-extern-c"
-
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
-#include "dobby.h"
-
 #pragma clang diagnostic pop
 
 // ============================================================================
-// [1] Advanced Compile-Time XOR String Obfuscator (Optimized for Boot Speed)
+// [1] Advanced Compile-Time XOR String Obfuscator (Ghost Strings)
 // ============================================================================
 template <size_t N>
 struct XorString {
     char data[N];
     constexpr XorString(const char* str, char key) : data{0} {
-        for (size_t i = 0; i < N; ++i) {
-            data[i] = str[i] ^ key;
-        }
+        for (size_t i = 0; i < N; ++i) data[i] = str[i] ^ key;
     }
 };
 
 #define OBF(str) \
     ([]() -> char* { \
-        constexpr char key = 0x5A; \
+        constexpr char key = 0x7B; \
         constexpr XorString<sizeof(str)> xs(str, key); \
         static char decrypted[sizeof(str)]; \
         static bool init = false; \
         if (!init) { \
-            for (size_t i = 0; i < sizeof(str); ++i) { \
-                decrypted[i] = xs.data[i] ^ key; \
-            } \
+            for (size_t i = 0; i < sizeof(str); ++i) decrypted[i] = xs.data[i] ^ key; \
             init = true; \
         } \
         return decrypted; \
     }())
 
 // ============================================================================
-// [2] Dobby Safe Hook Engine (No Crashes!)
+// [2] API Hashing Engine (For Stealth Lookups)
 // ============================================================================
-static void safe_hook(const char* func_name, void* replacement, void** original) {
-    // نستخدم محرك Dobby الداخلي للبحث عن الدوال (أقوى وأكثر أماناً من dlsym)
-    void* target_sym = DobbySymbolResolver(NULL, func_name);
-    
-    // إذا لم يجده، نحاول استخدام dlsym كخطة بديلة
-    if (!target_sym) {
-        target_sym = dlsym(RTLD_DEFAULT, func_name);
+constexpr uint32_t FNV_PRIME = 0x01000193;
+constexpr uint32_t FNV_OFFSET_BASIS = 0x811C9DC5;
+
+inline uint32_t hash_string_rt(const char* str) {
+    uint32_t hash = FNV_OFFSET_BASIS;
+    while (*str) {
+        hash ^= static_cast<uint32_t>(*str++);
+        hash *= FNV_PRIME;
     }
+    return hash;
+}
+
+// ============================================================================
+// [3] ZEUS APEX ENGINE: Mach Exception Hooking (Hardware-Level Stealth)
+// ============================================================================
+static mach_port_t exception_port;
+static pthread_t exception_thread;
+
+struct StealthHook {
+    void* target_address;
+    void* replacement_address;
+    uint32_t original_instruction;
+};
+
+#define MAX_HOOKS 128
+static StealthHook active_hooks[MAX_HOOKS];
+static int hook_count = 0;
+
+// أمر الـ Breakpoint لمعمارية ARM64 (BRK #1)
+#define ARM64_BRK 0xD4200020
+
+extern "C" boolean_t exc_server(mach_msg_header_t *request, mach_msg_header_t *reply);
+kern_return_t catch_exception_raise(mach_port_t exception_port, mach_port_t thread, mach_port_t task, exception_type_t exception, exception_data_t code, mach_msg_type_number_t codeCnt) {
+    arm_thread_state64_t state;
+    mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
     
-    // تأمين الكراش: الـ Hook يتم فقط إذا كانت الدالة موجودة فعلياً
-    if (target_sym != NULL) {
-        DobbyHook(target_sym, replacement, original);
+    thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &state_count);
+    void* crashed_pc = (void*)state.__pc;
+
+    for (int i = 0; i < hook_count; i++) {
+        if (active_hooks[i].target_address == crashed_pc) {
+            // تحويل مسار المعالج للدالة المزيفة في لمح البصر
+            state.__pc = (uint64_t)active_hooks[i].replacement_address;
+            thread_set_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, state_count);
+            return KERN_SUCCESS;
+        }
     }
+    return KERN_FAILURE;
+}
+
+void* exception_handler_thread(void* arg) {
+    mach_msg_server(exc_server, 2048, exception_port, 0);
+    return NULL;
+}
+
+void init_zeus_engine() {
+    mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &exception_port);
+    mach_port_insert_right(mach_task_self(), exception_port, exception_port, MACH_MSG_TYPE_MAKE_SEND);
+    task_set_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, exception_port, EXCEPTION_DEFAULT, ARM_THREAD_STATE64);
+    pthread_create(&exception_thread, NULL, exception_handler_thread, NULL);
+}
+
+void apex_hook(void* target, void* replacement) {
+    if (!target) return;
+    active_hooks[hook_count].target_address = target;
+    active_hooks[hook_count].replacement_address = replacement;
+    active_hooks[hook_count].original_instruction = *(uint32_t*)target;
+    hook_count++;
+    
+    // زرع أمر التوقف (BRK) بحجم بايت واحد فقط!
+    mprotect((void*)(((uintptr_t)target) & ~(PAGE_SIZE - 1)), PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC);
+    *(uint32_t*)target = ARM64_BRK;
+    mprotect((void*)(((uintptr_t)target) & ~(PAGE_SIZE - 1)), PAGE_SIZE, PROT_READ | PROT_EXEC);
+    sys_icache_invalidate(target, 4);
+}
+
+static void safe_hook_by_name(const char* func_name, void* replacement) {
+    void* target_sym = dlsym(RTLD_DEFAULT, func_name);
+    if (target_sym) apex_hook(target_sym, replacement);
 }
 
 static inline void junk_code(void) {
-    volatile int a = 5;
-    volatile int b = 10;
-    volatile int c = a * b + a - b;
-    (void)c;
+    volatile int a = 5; volatile int b = 10; volatile int c = a * b + a - b; (void)c;
 }
 
 // ============================================================================
-// [3] Original Pointers
+// [4] The Replacement Hooks (Full Bypass Arsenal)
 // ============================================================================
-static int (*orig_ptrace)(int request, pid_t pid, caddr_t addr, int data);
-static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-static int (*orig_sysctlbyname)(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-static int (*orig_task_for_pid)(mach_port_t target_tport, int pid, mach_port_t *tn);
 
-static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
-static OSStatus (*orig_SecItemAdd)(CFDictionaryRef attributes, CFTypeRef *result);
-static OSStatus (*orig_SecItemUpdate)(CFDictionaryRef query, CFDictionaryRef attributesToUpdate);
-static OSStatus (*orig_SecItemDelete)(CFDictionaryRef query);
-static SecKeyRef (*orig_SecKeyCreateRandomKey)(CFDictionaryRef parameters, CFErrorRef *error);
-static SecKeyRef (*orig_SecKeyCopyPublicKey)(SecKeyRef key);
-static CFDataRef (*orig_SecKeyCreateSignature)(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef dataToSign, CFErrorRef *error);
-static Boolean (*orig_SecKeyVerifySignature)(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef dataToSign, CFDataRef signature, CFErrorRef *error);
-
-static CCCryptorStatus (*orig_CCCrypt)(CCOperation op, CCAlgorithm alg, CCOptions options, const void *key, size_t keyLength, const void *iv, const void *dataIn, size_t dataInLength, void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved);
-
-static int (*orig_RSA_verify)(int type, const unsigned char *m, unsigned int m_len, const unsigned char *sig, unsigned int sig_len, RSA *rsa);
-static int (*orig_RSA_sign)(int type, const unsigned char *m, unsigned int m_len, unsigned char *sig, unsigned int *sig_len, RSA *rsa);
-static int (*orig_EVP_PKEY_verify)(EVP_PKEY_CTX *ctx, const unsigned char *sig, size_t sig_len, const unsigned char *tbs, size_t tbs_len);
-static int (*orig_X509_verify_cert)(X509_STORE_CTX *ctx);
-static int (*orig_X509_check_private_key)(X509 *x509, EVP_PKEY *pkey);
-static EVP_PKEY* (*orig_PEM_read_bio_PrivateKey)(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u);
-static int (*orig_SSL_CTX_use_PrivateKey_file)(SSL_CTX *ctx, const char *file, int type);
-static int (*orig_SSL_CTX_check_private_key)(SSL_CTX *ctx);
-static int (*orig_SSL_CTX_load_verify_locations)(SSL_CTX *ctx, const char *CAfile, const char *CApath);
-
-static IMP orig_LAContext_evaluatePolicy;
-static IMP orig_LAContext_canEvaluatePolicy;
-
-// ============================================================================
-// [4] Replacement Hooks (100% Safe)
-// ============================================================================
+// --- System & Anti-Debugging ---
 static int my_ptrace(int request, pid_t pid, caddr_t addr, int data) {
     junk_code();
-    if (request == PT_DENY_ATTACH) return 0;
-    return orig_ptrace ? orig_ptrace(request, pid, addr, data) : 0;
+    return 0; 
 }
 
 static int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     junk_code();
-    int ret = orig_sysctl ? orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen) : -1;
-    if (ret == 0 && oldp && namelen == 4 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
-        struct kinfo_proc *kp = (struct kinfo_proc *)oldp;
-        kp->kp_proc.p_flag &= ~P_TRACED;
+    if (oldp && namelen == 4 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
+        memset(oldp, 0, *oldlenp);
+        return 0;
     }
-    return ret;
+    return -1;
 }
 
 static int my_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     junk_code();
     if (name) {
         if (strcmp(name, OBF("kern.proc")) == 0 || strcmp(name, OBF("debug")) == 0) {
-            if (oldp && oldlenp) {
-                memset(oldp, 0, *oldlenp);
-                return 0;
-            }
+            if (oldp && oldlenp) { memset(oldp, 0, *oldlenp); return 0; }
         }
     }
-    return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
+    return -1;
+}
+
+static void* my_dlsym(void *handle, const char *symbol) {
+    junk_code();
+    if (symbol) {
+        uint32_t h = hash_string_rt(symbol);
+        if (h == hash_string_rt(OBF("ptrace")) || h == hash_string_rt(OBF("sysctl")) || h == hash_string_rt(OBF("task_for_pid"))) { 
+            return NULL;
+        }
+    }
+    return NULL;
 }
 
 static int my_task_for_pid(mach_port_t target_tport, int pid, mach_port_t *tn) { junk_code(); return KERN_FAILURE; }
+static int my_vm_read_overwrite(vm_map_t target_task, vm_address_t address, vm_size_t size, vm_address_t data, vm_size_t *outsize) { return KERN_FAILURE; }
 
-// Keychain
+// --- Keychain Bypass ---
 static OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) { junk_code(); return errSecItemNotFound; }
 static OSStatus my_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result) { junk_code(); return errSecDuplicateItem; }
 static OSStatus my_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attributesToUpdate) { junk_code(); return errSecItemNotFound; }
 static OSStatus my_SecItemDelete(CFDictionaryRef query) { junk_code(); return errSecSuccess; }
 
-// SecKey
+// --- SecKey (SSL/Cert Bypass) ---
 static SecKeyRef my_SecKeyCreateRandomKey(CFDictionaryRef parameters, CFErrorRef *error) { junk_code(); return NULL; }
 static SecKeyRef my_SecKeyCopyPublicKey(SecKeyRef key) { junk_code(); return NULL; }
 static CFDataRef my_SecKeyCreateSignature(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef dataToSign, CFErrorRef *error) {
@@ -176,18 +213,14 @@ static Boolean my_SecKeyVerifySignature(SecKeyRef key, SecKeyAlgorithm algorithm
     junk_code(); return true;
 }
 
-// CommonCrypto
+// --- CommonCrypto (AES Bypass) ---
 static CCCryptorStatus my_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options, const void *key, size_t keyLength, const void *iv, const void *dataIn, size_t dataInLength, void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
     junk_code();
-    if (dataOut && dataOutMoved) {
-        memcpy(dataOut, dataIn, dataInLength);
-        *dataOutMoved = dataInLength;
-        return kCCSuccess;
-    }
+    if (dataOut && dataOutMoved) { memcpy(dataOut, dataIn, dataInLength); *dataOutMoved = dataInLength; return kCCSuccess; }
     return kCCSuccess;
 }
 
-// OpenSSL
+// --- OpenSSL (Cert Pinning Bypass) ---
 static int my_RSA_verify(int type, const unsigned char *m, unsigned int m_len, const unsigned char *sig, unsigned int sig_len, RSA *rsa) { return 1; }
 static int my_RSA_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sig, unsigned int *sig_len, RSA *rsa) { return 1; }
 static int my_EVP_PKEY_verify(EVP_PKEY_CTX *ctx, const unsigned char *sig, size_t sig_len, const unsigned char *tbs, size_t tbs_len) { return 1; }
@@ -198,18 +231,7 @@ static int my_SSL_CTX_use_PrivateKey_file(SSL_CTX *ctx, const char *file, int ty
 static int my_SSL_CTX_check_private_key(SSL_CTX *ctx) { return 1; }
 static int my_SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile, const char *CApath) { return 1; }
 
-// ============================================================================
-// [5] Custom Checks Replacements
-// ============================================================================
-static bool (*orig_is_jb)(void);
-static bool (*orig_ROOTED)(void);
-static bool (*orig_DEBUGGER_ATTACHED)(void);
-static bool (*orig_isDebuggerAttached)(void);
-static bool (*orig_checkJailbreak)(void);
-static bool (*orig_hasCydia)(void);
-static bool (*orig_isJailbroken)(void);
-static bool (*orig_amIBeingDebugged)(void);
-
+// --- Generic JB Checks (C functions) ---
 static bool my_is_jb(void) { return false; }
 static bool my_ROOTED(void) { return false; }
 static bool my_DEBUGGER_ATTACHED(void) { return false; }
@@ -220,7 +242,7 @@ static bool my_isJailbroken_c(void) { return false; }
 static bool my_amIBeingDebugged(void) { return false; }
 
 // ============================================================================
-// [6] Objective-C Hooks
+// [5] Objective-C Hooks (Spoofing & FaceID)
 // ============================================================================
 static IMP orig_UIDevice_identifierForVendor;
 static id my_UIDevice_identifierForVendor(id self, SEL _cmd) {
@@ -240,104 +262,23 @@ static BOOL my_LAContext_canEvaluatePolicy(id self, SEL _cmd, LAPolicy policy, N
 }
 
 // ============================================================================
-// [7] The Master Hook Installer
-// ============================================================================
-void hook_all_functions() {
-    // تم إزالة dlsym و dlopen و vm_protect وغيرها لأنها تدمر Dobby
-    safe_hook(OBF("ptrace"), (void*)my_ptrace, (void**)&orig_ptrace);
-    safe_hook(OBF("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl);
-    safe_hook(OBF("sysctlbyname"), (void*)my_sysctlbyname, (void**)&orig_sysctlbyname);
-    safe_hook(OBF("task_for_pid"), (void*)my_task_for_pid, (void**)&orig_task_for_pid);
-
-    safe_hook(OBF("SecItemCopyMatching"), (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching);
-    safe_hook(OBF("SecItemAdd"), (void*)my_SecItemAdd, (void**)&orig_SecItemAdd);
-    safe_hook(OBF("SecItemUpdate"), (void*)my_SecItemUpdate, (void**)&orig_SecItemUpdate);
-    safe_hook(OBF("SecItemDelete"), (void*)my_SecItemDelete, (void**)&orig_SecItemDelete);
-
-    safe_hook(OBF("SecKeyCreateRandomKey"), (void*)my_SecKeyCreateRandomKey, (void**)&orig_SecKeyCreateRandomKey);
-    safe_hook(OBF("SecKeyCopyPublicKey"), (void*)my_SecKeyCopyPublicKey, (void**)&orig_SecKeyCopyPublicKey);
-    safe_hook(OBF("SecKeyCreateSignature"), (void*)my_SecKeyCreateSignature, (void**)&orig_SecKeyCreateSignature);
-    safe_hook(OBF("SecKeyVerifySignature"), (void*)my_SecKeyVerifySignature, (void**)&orig_SecKeyVerifySignature);
-
-    safe_hook(OBF("CCCrypt"), (void*)my_CCCrypt, (void**)&orig_CCCrypt);
-
-    safe_hook(OBF("RSA_verify"), (void*)my_RSA_verify, (void**)&orig_RSA_verify);
-    safe_hook(OBF("RSA_sign"), (void*)my_RSA_sign, (void**)&orig_RSA_sign);
-    safe_hook(OBF("EVP_PKEY_verify"), (void*)my_EVP_PKEY_verify, (void**)&orig_EVP_PKEY_verify);
-    safe_hook(OBF("X509_verify_cert"), (void*)my_X509_verify_cert, (void**)&orig_X509_verify_cert);
-    safe_hook(OBF("X509_check_private_key"), (void*)my_X509_check_private_key, (void**)&orig_X509_check_private_key);
-    safe_hook(OBF("PEM_read_bio_PrivateKey"), (void*)my_PEM_read_bio_PrivateKey, (void**)&orig_PEM_read_bio_PrivateKey);
-    safe_hook(OBF("SSL_CTX_use_PrivateKey_file"), (void*)my_SSL_CTX_use_PrivateKey_file, (void**)&orig_SSL_CTX_use_PrivateKey_file);
-    safe_hook(OBF("SSL_CTX_check_private_key"), (void*)my_SSL_CTX_check_private_key, (void**)&orig_SSL_CTX_check_private_key);
-    safe_hook(OBF("SSL_CTX_load_verify_locations"), (void*)my_SSL_CTX_load_verify_locations, (void**)&orig_SSL_CTX_load_verify_locations);
-
-    const char *jb_funcs[] = {OBF("is_jb"), OBF("ROOTED"), OBF("DEBUGGER_ATTACHED"), 
-                              OBF("isDebuggerAttached"), OBF("checkJailbreak"), 
-                              OBF("hasCydia"), OBF("isJailbroken"), OBF("amIBeingDebugged")};
-    void *jb_repl[] = {(void*)my_is_jb, (void*)my_ROOTED, (void*)my_DEBUGGER_ATTACHED, (void*)my_isDebuggerAttached,
-                       (void*)my_checkJailbreak, (void*)my_hasCydia, (void*)my_isJailbroken_c, (void*)my_amIBeingDebugged};
-    void **jb_orig[] = {(void**)&orig_is_jb, (void**)&orig_ROOTED, (void**)&orig_DEBUGGER_ATTACHED,
-                        (void**)&orig_isDebuggerAttached, (void**)&orig_checkJailbreak, (void**)&orig_hasCydia,
-                        (void**)&orig_isJailbroken, (void**)&orig_amIBeingDebugged};
-
-    for (int i = 0; i < 8; i++) {
-        safe_hook(jb_funcs[i], jb_repl[i], jb_orig[i]);
-    }
-
-    Class deviceCls = objc_getClass(OBF("UIDevice"));
-    if (deviceCls) {
-        SEL sel = @selector(identifierForVendor);
-        Method m = class_getInstanceMethod(deviceCls, sel);
-        if (m) {
-            orig_UIDevice_identifierForVendor = method_getImplementation(m);
-            method_setImplementation(m, (IMP)my_UIDevice_identifierForVendor);
-        }
-    }
-
-    Class laContextCls = objc_getClass(OBF("LAContext"));
-    if (laContextCls) {
-        SEL sel = @selector(evaluatePolicy:localizedReason:reply:);
-        Method m = class_getInstanceMethod(laContextCls, sel);
-        if (m) {
-            orig_LAContext_evaluatePolicy = method_getImplementation(m);
-            method_setImplementation(m, (IMP)my_LAContext_evaluatePolicy);
-        }
-        sel = @selector(canEvaluatePolicy:error:);
-        m = class_getInstanceMethod(laContextCls, sel);
-        if (m) {
-            orig_LAContext_canEvaluatePolicy = method_getImplementation(m);
-            method_setImplementation(m, (IMP)my_LAContext_canEvaluatePolicy);
-        }
-    }
-}
-
-// ============================================================================
-// [8] Safe Environment checks
+// [6] Safe Environment checks (Pre-Boot Watchdog)
 // ============================================================================
 int is_simulator() {
-    junk_code();
 #if TARGET_IPHONE_SIMULATOR
     return 1;
 #else
     struct utsname systemInfo;
     uname(&systemInfo);
-    if (strcmp(systemInfo.machine, OBF("x86_64")) == 0 || strcmp(systemInfo.machine, OBF("i386")) == 0) {
-        return 1;
-    }
+    if (strcmp(systemInfo.machine, OBF("x86_64")) == 0 || strcmp(systemInfo.machine, OBF("i386")) == 0) return 1;
     return 0;
 #endif
 }
 
 int is_jailbroken_paths() {
-    junk_code();
     const char *paths[] = {
-        OBF("/Applications/Cydia.app"),
-        OBF("/Library/MobileSubstrate/MobileSubstrate.dylib"),
-        OBF("/bin/bash"),
-        OBF("/usr/sbin/sshd"),
-        OBF("/etc/apt"),
-        OBF("/usr/sbin/frida-server"),
-        NULL
+        OBF("/Applications/Cydia.app"), OBF("/Library/MobileSubstrate/MobileSubstrate.dylib"),
+        OBF("/bin/bash"), OBF("/usr/sbin/sshd"), OBF("/etc/apt"), OBF("/usr/sbin/frida-server"), NULL
     };
     for (int i = 0; paths[i] != NULL; i++) {
         if (access(paths[i], F_OK) == 0) return 1;
@@ -346,61 +287,17 @@ int is_jailbroken_paths() {
 }
 
 int is_dyld_hijacked() {
-    junk_code();
-    if (getenv(OBF("DYLD_INSERT_LIBRARIES")) != NULL) return 1;
-    if (getenv(OBF("DYLD_FORCE_FLAT_NAMESPACE")) != NULL) return 1;
+    if (getenv(OBF("DYLD_INSERT_LIBRARIES")) != NULL || getenv(OBF("DYLD_FORCE_FLAT_NAMESPACE")) != NULL) return 1;
     return 0;
 }
 
 int is_debugger_attached() {
-    junk_code();
-    int name[4];
+    int name[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
     struct kinfo_proc info;
     size_t info_size = sizeof(info);
     info.kp_proc.p_flag = 0;
-    name[0] = CTL_KERN;
-    name[1] = KERN_PROC;
-    name[2] = KERN_PROC_PID;
-    name[3] = getpid();
     if (sysctl(name, 4, &info, &info_size, NULL, 0) == -1) return 0;
     return (info.kp_proc.p_flag & P_TRACED) != 0;
-}
-
-int check_provisioning() {
-    junk_code();
-    FILE *fp = NULL;
-    uint32_t size = 0;
-    
-    _NSGetExecutablePath(NULL, &size);
-    char *execPath = (char *)malloc(size); 
-    if (!execPath) return 0;
-    
-    _NSGetExecutablePath(execPath, &size);
-    char *lastSlash = strrchr(execPath, '/');
-    if (lastSlash) {
-        *lastSlash = '\0';
-        char path[MAXPATHLEN];
-        snprintf(path, sizeof(path), OBF("%s/embedded.mobileprovision"), execPath);
-        fp = fopen(path, OBF("r"));
-    }
-    free(execPath);
-    
-    if (!fp) return 0;
-    
-    fseek(fp, 0, SEEK_END);
-    long len = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    
-    char *data = (char *)malloc(len + 1);
-    if (!data) { fclose(fp); return 0; }
-    
-    fread(data, 1, len, fp);
-    fclose(fp);
-    data[len] = '\0';
-    
-    int is_debuggable = strstr(data, OBF("<key>get-task-allow</key><true/>")) != NULL;
-    free(data);
-    return is_debuggable;
 }
 
 void perform_security_checks() {
@@ -409,19 +306,85 @@ void perform_security_checks() {
     if (is_jailbroken_paths()) threat_level += 20;
     if (is_dyld_hijacked()) threat_level += 30;
     if (is_debugger_attached()) threat_level += 50;
-    if (check_provisioning()) threat_level += 30;
     
+    // إذا كانت البيئة مخترقة بشكل عنيف، نقتل التطبيق قبل أن يبدأ
     if (threat_level > 50) {
-        _exit(1); // إغلاق فوري إذا كان هناك تهديد أمني عالي بدون تأخير يسبب Deadlock
+        _exit(1);
     }
 }
 
 // ============================================================================
-// [9] Initialization
+// [7] Master Initialization (The APEX Ignition)
 // ============================================================================
 __attribute__((constructor))
-void init_hook() {
+void init_apex_master() {
+    // 1. الفحص الاستباقي للبيئة
     perform_security_checks();
-    hook_all_functions();
-    // تمت إزالة الـ Hook الخاص بـ printf لأنه يسبب Crash أثناء الإقلاع!
+    
+    // 2. تشغيل محرك استثناءات ماخ (Apex Engine)
+    init_zeus_engine();
+    
+    // 3. حقن الهوكات بالـ BRK (بدون Dobby، بدون تعديل ذاكرة واضح)
+    safe_hook_by_name(OBF("ptrace"), (void*)my_ptrace);
+    safe_hook_by_name(OBF("sysctl"), (void*)my_sysctl);
+    safe_hook_by_name(OBF("sysctlbyname"), (void*)my_sysctlbyname);
+    safe_hook_by_name(OBF("dlsym"), (void*)my_dlsym);
+    safe_hook_by_name(OBF("task_for_pid"), (void*)my_task_for_pid);
+    safe_hook_by_name(OBF("vm_read_overwrite"), (void*)my_vm_read_overwrite);
+    
+    safe_hook_by_name(OBF("SecItemCopyMatching"), (void*)my_SecItemCopyMatching);
+    safe_hook_by_name(OBF("SecItemAdd"), (void*)my_SecItemAdd);
+    safe_hook_by_name(OBF("SecItemUpdate"), (void*)my_SecItemUpdate);
+    safe_hook_by_name(OBF("SecItemDelete"), (void*)my_SecItemDelete);
+    
+    safe_hook_by_name(OBF("SecKeyCreateRandomKey"), (void*)my_SecKeyCreateRandomKey);
+    safe_hook_by_name(OBF("SecKeyCopyPublicKey"), (void*)my_SecKeyCopyPublicKey);
+    safe_hook_by_name(OBF("SecKeyCreateSignature"), (void*)my_SecKeyCreateSignature);
+    safe_hook_by_name(OBF("SecKeyVerifySignature"), (void*)my_SecKeyVerifySignature);
+    
+    safe_hook_by_name(OBF("CCCrypt"), (void*)my_CCCrypt);
+    
+    safe_hook_by_name(OBF("RSA_verify"), (void*)my_RSA_verify);
+    safe_hook_by_name(OBF("RSA_sign"), (void*)my_RSA_sign);
+    safe_hook_by_name(OBF("EVP_PKEY_verify"), (void*)my_EVP_PKEY_verify);
+    safe_hook_by_name(OBF("X509_verify_cert"), (void*)my_X509_verify_cert);
+    safe_hook_by_name(OBF("X509_check_private_key"), (void*)my_X509_check_private_key);
+    safe_hook_by_name(OBF("PEM_read_bio_PrivateKey"), (void*)my_PEM_read_bio_PrivateKey);
+    safe_hook_by_name(OBF("SSL_CTX_use_PrivateKey_file"), (void*)my_SSL_CTX_use_PrivateKey_file);
+    safe_hook_by_name(OBF("SSL_CTX_check_private_key"), (void*)my_SSL_CTX_check_private_key);
+    safe_hook_by_name(OBF("SSL_CTX_load_verify_locations"), (void*)my_SSL_CTX_load_verify_locations);
+
+    // حقن دوال C الوهمية
+    const char *jb_funcs[] = {OBF("is_jb"), OBF("ROOTED"), OBF("DEBUGGER_ATTACHED"), 
+                              OBF("isDebuggerAttached"), OBF("checkJailbreak"), 
+                              OBF("hasCydia"), OBF("isJailbroken"), OBF("amIBeingDebugged")};
+    void *jb_repl[] = {(void*)my_is_jb, (void*)my_ROOTED, (void*)my_DEBUGGER_ATTACHED, (void*)my_isDebuggerAttached,
+                       (void*)my_checkJailbreak, (void*)my_hasCydia, (void*)my_isJailbroken_c, (void*)my_amIBeingDebugged};
+    for (int i = 0; i < 8; i++) {
+        safe_hook_by_name(jb_funcs[i], jb_repl[i]);
+    }
+
+    // 4. Objective-C Runtime Swizzling (Native & Safe)
+    Class deviceCls = objc_getClass(OBF("UIDevice"));
+    if (deviceCls) {
+        Method m = class_getInstanceMethod(deviceCls, @selector(identifierForVendor));
+        if (m) {
+            orig_UIDevice_identifierForVendor = method_getImplementation(m);
+            method_setImplementation(m, (IMP)my_UIDevice_identifierForVendor);
+        }
+    }
+
+    Class laContextCls = objc_getClass(OBF("LAContext"));
+    if (laContextCls) {
+        Method m1 = class_getInstanceMethod(laContextCls, @selector(evaluatePolicy:localizedReason:reply:));
+        if (m1) {
+            orig_LAContext_evaluatePolicy = method_getImplementation(m1);
+            method_setImplementation(m1, (IMP)my_LAContext_evaluatePolicy);
+        }
+        Method m2 = class_getInstanceMethod(laContextCls, @selector(canEvaluatePolicy:error:));
+        if (m2) {
+            orig_LAContext_canEvaluatePolicy = method_getImplementation(m2);
+            method_setImplementation(m2, (IMP)my_LAContext_canEvaluatePolicy);
+        }
+    }
 }
