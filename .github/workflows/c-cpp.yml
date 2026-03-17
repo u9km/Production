@@ -1,70 +1,35 @@
-name: Zeus-Production-Build
+name: Build Zeus Apex Tweak
+
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
-    
-    env:
-      THEOS: ${{ github.workspace }}/theos
-
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-      - name: ⚙️ Setup Theos (Clean Direct Clone)
+      - name: Setup Theos
         run: |
-          rm -rf $THEOS
-          git clone --recursive https://github.com/theos/theos.git $THEOS
-          brew install ldid
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          echo "THEOS=~/theos" >> $GITHUB_ENV
 
-      - name: 🩹 Fix Missing Headers (ptrace.h)
+      - name: Install Dependencies
         run: |
-          mkdir -p $THEOS/include/sys
-          cat << 'EOF' > $THEOS/include/sys/ptrace.h
-          #ifndef _SYS_PTRACE_H_
-          #define _SYS_PTRACE_H_
-          #include <sys/types.h>
-          
-          #define PT_TRACE_ME 0
-          #define PT_DENY_ATTACH 31
-          #define PT_ATTACH 16
-          #define PT_DETACH 17
-          
-          extern "C" int ptrace(int request, pid_t pid, caddr_t addr, int data);
-          #endif
-          EOF
+          brew install openssl
 
-      - name: 🔐 Fix OpenSSL Missing Headers
+      - name: Build Tweak
         run: |
-          # تثبيت OpenSSL عبر Homebrew في سيرفر البناء
-          brew install openssl@3
-          
-          # نسخ مجلد الترويسات بالكامل إلى مسار Theos ليتعرف عليها الكود
-          cp -R $(brew --prefix openssl@3)/include/openssl $THEOS/include/
-
-      - name: 🚀 Compile & Build
-        run: |
-          make clean
+          make package clean
           make package FINALPACKAGE=1
-        
-      - name: 🛡️ Extract & Sign (Zero-Trust Bypass)
-        run: |
-          mkdir -p output
-          cp .theos/obj/arm64/libwebp.dylib output/libwebp
-          
-          ldid -S output/libwebp
-          
-          echo "====================================="
-          echo "🛡️ Dylib Compiled Successfully:"
-          ls -lh output/libwebp
-          echo "====================================="
 
-      - name: 📤 Upload Final Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libwebp-zeus-159
-          path: output/libwebp
+          name: Zeus_Apex_Tweak
+          path: packages/*.deb
