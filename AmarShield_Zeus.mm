@@ -1,5 +1,5 @@
 // ============================================================================
-// [0] System Headers
+// [0] System Headers (Ordered correctly to prevent C++ module errors)
 // ============================================================================
 #include <stdio.h>
 #include <stdarg.h>
@@ -32,7 +32,7 @@
 #include <Security/SecKey.h>
 
 // ============================================================================
-// إجبار المترجم برمجياً على تجاهل تعارض C++ Modules مع extern "C"
+// [1] Compiler Directives to mute warnings
 // ============================================================================
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmodule-import-in-extern-c"
@@ -45,37 +45,59 @@
 #include "dobby.h"
 
 #pragma clang diagnostic pop
-// ============================================================================
 
 // ============================================================================
-// [1] Obfuscation helpers (simple ROT13)
+// [2] State-of-the-Art Compile-Time XOR String Obfuscator (2026 Standard)
+// لا يترك أي أثر للنصوص في ملف الـ dylib النهائي ويمنع الكراش
 // ============================================================================
-static inline void obfuscate_str(char *s) {
-    while (*s) {
-        if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z')) {
-            if ((*s >= 'a' && *s <= 'm') || (*s >= 'A' && *s <= 'M'))
-                *s += 13;
-            else
-                *s -= 13;
+template <size_t N>
+struct XorString {
+    char data[N];
+    constexpr XorString(const char* str, char key) : data{0} {
+        for (size_t i = 0; i < N; ++i) {
+            data[i] = str[i] ^ key;
         }
-        s++;
+    }
+};
+
+// ماكرو أسطوري يقوم بتشفير النص وفك تشفيره بشكل آمن في الذاكرة الحية فقط
+#define OBF(str) \
+    ([]() -> char* { \
+        constexpr char key = 0x5A; \
+        constexpr XorString<sizeof(str)> xs(str, key); \
+        static char decrypted[sizeof(str)]; \
+        for (size_t i = 0; i < sizeof(str); ++i) { \
+            decrypted[i] = xs.data[i] ^ key; \
+        } \
+        return decrypted; \
+    }())
+
+// ============================================================================
+// [3] Safe Hooking Engine (Crash Preventer)
+// ============================================================================
+static void safe_hook(const char* func_name, void* replacement, void** original) {
+    // نستخدم dlsym الأصلي لجلب عنوان الدالة بشكل آمن جداً من نظام iOS
+    void* target_sym = dlsym(RTLD_DEFAULT, func_name);
+    
+    // درع الحماية من الكراش: لا نلمس الذاكرة إلا إذا كانت الدالة موجودة فعلياً
+    if (target_sym != NULL) {
+        DobbyHook(target_sym, replacement, original);
     }
 }
 
-#define OBF(s) obfuscate_str((char[])s)
-
 // ============================================================================
-// [2] Random junk code to disrupt pattern analysis
+// [4] Safe Junk Code (No rand() to avoid Deadlocks during Boot)
 // ============================================================================
 static inline void junk_code(void) {
-    volatile int a = rand() % 100;
-    volatile int b = rand() % 100;
+    // تم إزالة rand() واستبداله بعمليات رياضية وهمية لعدم إثقال النواة
+    volatile int a = 5;
+    volatile int b = 10;
     volatile int c = a * b + a - b;
     (void)c;
 }
 
 // ============================================================================
-// [3] Original function pointers (C functions)
+// [5] Original function pointers (C functions)
 // ============================================================================
 static int (*orig_printf)(const char *format, ...);
 static int (*orig_ptrace)(int request, pid_t pid, caddr_t addr, int data);
@@ -89,13 +111,11 @@ static int (*orig_vm_write)(vm_map_t target_task, vm_address_t address, vm_offse
 static int (*orig_vm_protect)(vm_map_t target_task, vm_address_t address, vm_size_t size, boolean_t set_max, vm_prot_t new_protection);
 static int (*orig_mach_vm_protect)(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, boolean_t set_max, vm_prot_t new_protection);
 
-// Keychain
+// Keychain & SecKey
 static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef query, CFTypeRef *result);
 static OSStatus (*orig_SecItemAdd)(CFDictionaryRef attributes, CFTypeRef *result);
 static OSStatus (*orig_SecItemUpdate)(CFDictionaryRef query, CFDictionaryRef attributesToUpdate);
 static OSStatus (*orig_SecItemDelete)(CFDictionaryRef query);
-
-// SecKey
 static SecKeyRef (*orig_SecKeyCreateRandomKey)(CFDictionaryRef parameters, CFErrorRef *error);
 static SecKeyRef (*orig_SecKeyCopyPublicKey)(SecKeyRef key);
 static CFDataRef (*orig_SecKeyCreateSignature)(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef dataToSign, CFErrorRef *error);
@@ -115,12 +135,12 @@ static int (*orig_SSL_CTX_use_PrivateKey_file)(SSL_CTX *ctx, const char *file, i
 static int (*orig_SSL_CTX_check_private_key)(SSL_CTX *ctx);
 static int (*orig_SSL_CTX_load_verify_locations)(SSL_CTX *ctx, const char *CAfile, const char *CApath);
 
-// LocalAuthentication (Obj-C, but we'll use runtime)
+// LocalAuthentication
 static IMP orig_LAContext_evaluatePolicy;
 static IMP orig_LAContext_canEvaluatePolicy;
 
 // ============================================================================
-// [4] Replacement functions with junk code
+// [6] Replacement functions (Hooks)
 // ============================================================================
 static int my_ptrace(int request, pid_t pid, caddr_t addr, int data) {
     junk_code();
@@ -130,7 +150,7 @@ static int my_ptrace(int request, pid_t pid, caddr_t addr, int data) {
 
 static int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     junk_code();
-    int ret = orig_sysctl ? orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen) : 0;
+    int ret = orig_sysctl ? orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen) : -1;
     if (ret == 0 && oldp && namelen == 4 && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
         struct kinfo_proc *kp = (struct kinfo_proc *)oldp;
         kp->kp_proc.p_flag &= ~P_TRACED;
@@ -140,16 +160,15 @@ static int my_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void
 
 static int my_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     junk_code();
-    char buf[256];
-    strncpy(buf, name, sizeof(buf));
-    obfuscate_str(buf);
-    if (strstr(buf, "qroht") || strstr(buf, "xrea.cebp")) { // "debug", "kern.proc" after ROT13
-        if (oldp && oldlenp) {
-            memset(oldp, 0, *oldlenp);
-            return 0;
+    if (name) {
+        if (strcmp(name, OBF("kern.proc")) == 0 || strcmp(name, OBF("debug")) == 0) {
+            if (oldp && oldlenp) {
+                memset(oldp, 0, *oldlenp);
+                return 0;
+            }
         }
     }
-    return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : 0;
+    return orig_sysctlbyname ? orig_sysctlbyname(name, oldp, oldlenp, newp, newlen) : -1;
 }
 
 static void* my_dlopen(const char *path, int mode) {
@@ -159,80 +178,40 @@ static void* my_dlopen(const char *path, int mode) {
 
 static void* my_dlsym(void *handle, const char *symbol) {
     junk_code();
-    char buf[256];
-    strncpy(buf, symbol, sizeof(buf));
-    obfuscate_str(buf);
-    if (strstr(buf, "cgenpr") || strstr(buf, "flfpby") || strstr(buf, "gnfx_sbe_cvq") || strstr(buf, "iz_ernq")) { // "ptrace", "sysctl", "task_for_pid", "vm_read"
-        return NULL;
+    if (symbol) {
+        if (strcmp(symbol, OBF("ptrace")) == 0 || 
+            strcmp(symbol, OBF("sysctl")) == 0 || 
+            strcmp(symbol, OBF("task_for_pid")) == 0) { 
+            return NULL;
+        }
     }
     return orig_dlsym ? orig_dlsym(handle, symbol) : NULL;
 }
 
-static int my_task_for_pid(mach_port_t target_tport, int pid, mach_port_t *tn) {
-    junk_code();
-    return KERN_FAILURE;
-}
-
-static int my_vm_read_overwrite(vm_map_t target_task, vm_address_t address, vm_size_t size, vm_address_t data, vm_size_t *outsize) {
-    junk_code();
-    return KERN_FAILURE;
-}
-
-static int my_vm_write(vm_map_t target_task, vm_address_t address, vm_offset_t data, mach_msg_type_number_t dataCnt) {
-    junk_code();
-    return KERN_FAILURE;
-}
-
+static int my_task_for_pid(mach_port_t target_tport, int pid, mach_port_t *tn) { junk_code(); return KERN_FAILURE; }
+static int my_vm_read_overwrite(vm_map_t target_task, vm_address_t address, vm_size_t size, vm_address_t data, vm_size_t *outsize) { junk_code(); return KERN_FAILURE; }
+static int my_vm_write(vm_map_t target_task, vm_address_t address, vm_offset_t data, mach_msg_type_number_t dataCnt) { junk_code(); return KERN_FAILURE; }
 static int my_vm_protect(vm_map_t target_task, vm_address_t address, vm_size_t size, boolean_t set_max, vm_prot_t new_protection) {
-    junk_code();
-    return orig_vm_protect ? orig_vm_protect(target_task, address, size, set_max, new_protection) : KERN_SUCCESS;
+    junk_code(); return orig_vm_protect ? orig_vm_protect(target_task, address, size, set_max, new_protection) : KERN_SUCCESS;
 }
-
 static int my_mach_vm_protect(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, boolean_t set_max, vm_prot_t new_protection) {
-    junk_code();
-    return orig_mach_vm_protect ? orig_mach_vm_protect(target_task, address, size, set_max, new_protection) : KERN_SUCCESS;
+    junk_code(); return orig_mach_vm_protect ? orig_mach_vm_protect(target_task, address, size, set_max, new_protection) : KERN_SUCCESS;
 }
 
 // Keychain
-static OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
-    junk_code();
-    return errSecItemNotFound;
-}
-
-static OSStatus my_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result) {
-    junk_code();
-    return errSecDuplicateItem;
-}
-
-static OSStatus my_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attributesToUpdate) {
-    junk_code();
-    return errSecItemNotFound;
-}
-
-static OSStatus my_SecItemDelete(CFDictionaryRef query) {
-    junk_code();
-    return errSecSuccess;
-}
+static OSStatus my_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) { junk_code(); return errSecItemNotFound; }
+static OSStatus my_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result) { junk_code(); return errSecDuplicateItem; }
+static OSStatus my_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attributesToUpdate) { junk_code(); return errSecItemNotFound; }
+static OSStatus my_SecItemDelete(CFDictionaryRef query) { junk_code(); return errSecSuccess; }
 
 // SecKey
-static SecKeyRef my_SecKeyCreateRandomKey(CFDictionaryRef parameters, CFErrorRef *error) {
-    junk_code();
-    return NULL;
-}
-
-static SecKeyRef my_SecKeyCopyPublicKey(SecKeyRef key) {
-    junk_code();
-    return NULL; // prevent public key usage
-}
-
+static SecKeyRef my_SecKeyCreateRandomKey(CFDictionaryRef parameters, CFErrorRef *error) { junk_code(); return NULL; }
+static SecKeyRef my_SecKeyCopyPublicKey(SecKeyRef key) { junk_code(); return NULL; }
 static CFDataRef my_SecKeyCreateSignature(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef dataToSign, CFErrorRef *error) {
-    junk_code();
-    return CFDataCreate(NULL, (const UInt8*)"fake_signature", 14);
+    junk_code(); return CFDataCreate(NULL, (const UInt8*)OBF("fake_signature"), 14);
 }
-
 static Boolean my_SecKeyVerifySignature(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef dataToSign, CFDataRef signature, CFErrorRef *error) {
-    junk_code();
-    return true;
+    junk_code(); return true;
 }
 
 // CommonCrypto
@@ -247,53 +226,18 @@ static CCCryptorStatus my_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions opt
 }
 
 // OpenSSL
-static int my_RSA_verify(int type, const unsigned char *m, unsigned int m_len, const unsigned char *sig, unsigned int sig_len, RSA *rsa) {
-    junk_code();
-    return 1;
-}
-
-static int my_RSA_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sig, unsigned int *sig_len, RSA *rsa) {
-    junk_code();
-    return 1;
-}
-
-static int my_EVP_PKEY_verify(EVP_PKEY_CTX *ctx, const unsigned char *sig, size_t sig_len, const unsigned char *tbs, size_t tbs_len) {
-    junk_code();
-    return 1;
-}
-
-static int my_X509_verify_cert(X509_STORE_CTX *ctx) {
-    junk_code();
-    return 1;
-}
-
-static int my_X509_check_private_key(X509 *x509, EVP_PKEY *pkey) {
-    junk_code();
-    return 1;
-}
-
-static EVP_PKEY* my_PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u) {
-    junk_code();
-    return NULL;
-}
-
-static int my_SSL_CTX_use_PrivateKey_file(SSL_CTX *ctx, const char *file, int type) {
-    junk_code();
-    return 1;
-}
-
-static int my_SSL_CTX_check_private_key(SSL_CTX *ctx) {
-    junk_code();
-    return 1;
-}
-
-static int my_SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile, const char *CApath) {
-    junk_code();
-    return 1;
-}
+static int my_RSA_verify(int type, const unsigned char *m, unsigned int m_len, const unsigned char *sig, unsigned int sig_len, RSA *rsa) { junk_code(); return 1; }
+static int my_RSA_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sig, unsigned int *sig_len, RSA *rsa) { junk_code(); return 1; }
+static int my_EVP_PKEY_verify(EVP_PKEY_CTX *ctx, const unsigned char *sig, size_t sig_len, const unsigned char *tbs, size_t tbs_len) { junk_code(); return 1; }
+static int my_X509_verify_cert(X509_STORE_CTX *ctx) { junk_code(); return 1; }
+static int my_X509_check_private_key(X509 *x509, EVP_PKEY *pkey) { junk_code(); return 1; }
+static EVP_PKEY* my_PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u) { junk_code(); return NULL; }
+static int my_SSL_CTX_use_PrivateKey_file(SSL_CTX *ctx, const char *file, int type) { junk_code(); return 1; }
+static int my_SSL_CTX_check_private_key(SSL_CTX *ctx) { junk_code(); return 1; }
+static int my_SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile, const char *CApath) { junk_code(); return 1; }
 
 // ============================================================================
-// [5] Original C functions for environment checks
+// [7] Original C functions for environment checks
 // ============================================================================
 static bool (*orig_is_jb)(void);
 static bool (*orig_ROOTED)(void);
@@ -314,18 +258,18 @@ static bool my_isJailbroken_c(void) { junk_code(); return false; }
 static bool my_amIBeingDebugged(void) { junk_code(); return false; }
 
 // ============================================================================
-// [6] Objective-C replacement methods
+// [8] Objective-C replacement methods
 // ============================================================================
 static IMP orig_UIDevice_identifierForVendor;
 static id my_UIDevice_identifierForVendor(id self, SEL _cmd) {
     junk_code();
-    return [[NSUUID alloc] initWithUUIDString:@"00000000-0000-0000-0000-000000000000"];
+    return [[NSUUID alloc] initWithUUIDString:@(OBF("00000000-0000-0000-0000-000000000000"))];
 }
 
 static void my_LAContext_evaluatePolicy(id self, SEL _cmd, LAPolicy policy, id reply) {
     junk_code();
     void (^replyBlock)(BOOL success, NSError *error) = reply;
-    replyBlock(YES, nil);
+    if (replyBlock) replyBlock(YES, nil);
 }
 
 static BOOL my_LAContext_canEvaluatePolicy(id self, SEL _cmd, LAPolicy policy, NSError **error) {
@@ -334,79 +278,63 @@ static BOOL my_LAContext_canEvaluatePolicy(id self, SEL _cmd, LAPolicy policy, N
 }
 
 // ============================================================================
-// [7] Stealth hook function (searches by obfuscated name)
-// ============================================================================
-static void stealth_hook(const char *obf_name, void *replacement, void **original) {
-    char real_name[256];
-    strncpy(real_name, obf_name, sizeof(real_name));
-    obfuscate_str(real_name); // de-obfuscate
-    void *sym = dlsym(RTLD_DEFAULT, real_name);
-    if (sym) {
-        DobbyHook(sym, replacement, original);
-    }
-}
-
-// ============================================================================
-// [8] Hooking function
+// [9] The Master Hook Installer (Using Safe XOR & Dobby)
 // ============================================================================
 void hook_all_functions() {
-    // دوال النظام
-    stealth_hook("cgenpr", (void*)my_ptrace, (void**)&orig_ptrace);
-    stealth_hook("flfpby", (void*)my_sysctl, (void**)&orig_sysctl);
-    stealth_hook("flfpbyolanzr", (void*)my_sysctlbyname, (void**)&orig_sysctlbyname);
-    stealth_hook("qybcra", (void*)my_dlopen, (void**)&orig_dlopen);
-    stealth_hook("qyflz", (void*)my_dlsym, (void**)&orig_dlsym);
-    stealth_hook("gnfx_sbe_cvq", (void*)my_task_for_pid, (void**)&orig_task_for_pid);
-    stealth_hook("iz_ernq_birejevgr", (void*)my_vm_read_overwrite, (void**)&orig_vm_read_overwrite);
-    stealth_hook("iz_jevgr", (void*)my_vm_write, (void**)&orig_vm_write);
-    stealth_hook("iz_cebgrpg", (void*)my_vm_protect, (void**)&orig_vm_protect);
-    stealth_hook("znpu_iz_cebgrpg", (void*)my_mach_vm_protect, (void**)&orig_mach_vm_protect);
+    // دوال النظام المشفرة والمحمية
+    safe_hook(OBF("ptrace"), (void*)my_ptrace, (void**)&orig_ptrace);
+    safe_hook(OBF("sysctl"), (void*)my_sysctl, (void**)&orig_sysctl);
+    safe_hook(OBF("sysctlbyname"), (void*)my_sysctlbyname, (void**)&orig_sysctlbyname);
+    safe_hook(OBF("dlopen"), (void*)my_dlopen, (void**)&orig_dlopen);
+    safe_hook(OBF("dlsym"), (void*)my_dlsym, (void**)&orig_dlsym);
+    safe_hook(OBF("task_for_pid"), (void*)my_task_for_pid, (void**)&orig_task_for_pid);
+    safe_hook(OBF("vm_read_overwrite"), (void*)my_vm_read_overwrite, (void**)&orig_vm_read_overwrite);
+    safe_hook(OBF("vm_write"), (void*)my_vm_write, (void**)&orig_vm_write);
+    safe_hook(OBF("vm_protect"), (void*)my_vm_protect, (void**)&orig_vm_protect);
+    safe_hook(OBF("mach_vm_protect"), (void*)my_mach_vm_protect, (void**)&orig_mach_vm_protect);
 
     // Keychain
-    stealth_hook("FrpVgrzPbclZngpuvat", (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching);
-    stealth_hook("FrpVgrzNqq", (void*)my_SecItemAdd, (void**)&orig_SecItemAdd);
-    stealth_hook("FrpVgrzHcqngr", (void*)my_SecItemUpdate, (void**)&orig_SecItemUpdate);
-    stealth_hook("FrpVgrzQryrgr", (void*)my_SecItemDelete, (void**)&orig_SecItemDelete);
+    safe_hook(OBF("SecItemCopyMatching"), (void*)my_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching);
+    safe_hook(OBF("SecItemAdd"), (void*)my_SecItemAdd, (void**)&orig_SecItemAdd);
+    safe_hook(OBF("SecItemUpdate"), (void*)my_SecItemUpdate, (void**)&orig_SecItemUpdate);
+    safe_hook(OBF("SecItemDelete"), (void*)my_SecItemDelete, (void**)&orig_SecItemDelete);
 
     // SecKey
-    stealth_hook("FrpXrlPerngrEnaqbzXrl", (void*)my_SecKeyCreateRandomKey, (void**)&orig_SecKeyCreateRandomKey);
-    stealth_hook("FrpXrlPbclChoyvpXrl", (void*)my_SecKeyCopyPublicKey, (void**)&orig_SecKeyCopyPublicKey);
-    stealth_hook("FrpXrlPerngrFvtangher", (void*)my_SecKeyCreateSignature, (void**)&orig_SecKeyCreateSignature);
-    stealth_hook("FrpXrlIrevslFvtangher", (void*)my_SecKeyVerifySignature, (void**)&orig_SecKeyVerifySignature);
+    safe_hook(OBF("SecKeyCreateRandomKey"), (void*)my_SecKeyCreateRandomKey, (void**)&orig_SecKeyCreateRandomKey);
+    safe_hook(OBF("SecKeyCopyPublicKey"), (void*)my_SecKeyCopyPublicKey, (void**)&orig_SecKeyCopyPublicKey);
+    safe_hook(OBF("SecKeyCreateSignature"), (void*)my_SecKeyCreateSignature, (void**)&orig_SecKeyCreateSignature);
+    safe_hook(OBF("SecKeyVerifySignature"), (void*)my_SecKeyVerifySignature, (void**)&orig_SecKeyVerifySignature);
 
     // CommonCrypto
-    stealth_hook("PPPelcg", (void*)my_CCCrypt, (void**)&orig_CCCrypt);
+    safe_hook(OBF("CCCrypt"), (void*)my_CCCrypt, (void**)&orig_CCCrypt);
 
     // OpenSSL
-    stealth_hook("ENF_irevsl", (void*)my_RSA_verify, (void**)&orig_RSA_verify);
-    stealth_hook("ENF_fvta", (void*)my_RSA_sign, (void**)&orig_RSA_sign);
-    stealth_hook("RUC_XRL_irevsl", (void*)my_EVP_PKEY_verify, (void**)&orig_EVP_PKEY_verify);
-    stealth_hook("K509_irevsl_preg", (void*)my_X509_verify_cert, (void**)&orig_X509_verify_cert);
-    stealth_hook("K509_purpx_cevingr_xrl", (void*)my_X509_check_private_key, (void**)&orig_X509_check_private_key);
-    stealth_hook("CRZ_ernq_ovb_CevngrXrl", (void*)my_PEM_read_bio_PrivateKey, (void**)&orig_PEM_read_bio_PrivateKey);
-    stealth_hook("FFY_PGK_hfr_CevngrXrl_svyr", (void*)my_SSL_CTX_use_PrivateKey_file, (void**)&orig_SSL_CTX_use_PrivateKey_file);
-    stealth_hook("FFY_PGK_purpx_cevingr_xrl", (void*)my_SSL_CTX_check_private_key, (void**)&orig_SSL_CTX_check_private_key);
-    stealth_hook("FFY_PGK_ybnq_irevsl_ybpngvbaf", (void*)my_SSL_CTX_load_verify_locations, (void**)&orig_SSL_CTX_load_verify_locations);
+    safe_hook(OBF("RSA_verify"), (void*)my_RSA_verify, (void**)&orig_RSA_verify);
+    safe_hook(OBF("RSA_sign"), (void*)my_RSA_sign, (void**)&orig_RSA_sign);
+    safe_hook(OBF("EVP_PKEY_verify"), (void*)my_EVP_PKEY_verify, (void**)&orig_EVP_PKEY_verify);
+    safe_hook(OBF("X509_verify_cert"), (void*)my_X509_verify_cert, (void**)&orig_X509_verify_cert);
+    safe_hook(OBF("X509_check_private_key"), (void*)my_X509_check_private_key, (void**)&orig_X509_check_private_key);
+    safe_hook(OBF("PEM_read_bio_PrivateKey"), (void*)my_PEM_read_bio_PrivateKey, (void**)&orig_PEM_read_bio_PrivateKey);
+    safe_hook(OBF("SSL_CTX_use_PrivateKey_file"), (void*)my_SSL_CTX_use_PrivateKey_file, (void**)&orig_SSL_CTX_use_PrivateKey_file);
+    safe_hook(OBF("SSL_CTX_check_private_key"), (void*)my_SSL_CTX_check_private_key, (void**)&orig_SSL_CTX_check_private_key);
+    safe_hook(OBF("SSL_CTX_load_verify_locations"), (void*)my_SSL_CTX_load_verify_locations, (void**)&orig_SSL_CTX_load_verify_locations);
 
-    // دوال كشف البيئة (C)
-    const char *jb_funcs[] = {"vf_wo", "EBBGRQ", "QRHTTRE_NGGNPURQ", "vfQrhttreNggnpurq", "purpxWnvyoernx", "unfPlqvn", "vfWnvyoernx", "nzVOrvatQrhttrq"};
+    // الدوال الوهمية للتطبيق
+    const char *jb_funcs[] = {OBF("is_jb"), OBF("ROOTED"), OBF("DEBUGGER_ATTACHED"), 
+                              OBF("isDebuggerAttached"), OBF("checkJailbreak"), 
+                              OBF("hasCydia"), OBF("isJailbroken"), OBF("amIBeingDebugged")};
     void *jb_repl[] = {(void*)my_is_jb, (void*)my_ROOTED, (void*)my_DEBUGGER_ATTACHED, (void*)my_isDebuggerAttached,
                        (void*)my_checkJailbreak, (void*)my_hasCydia, (void*)my_isJailbroken_c, (void*)my_amIBeingDebugged};
     void **jb_orig[] = {(void**)&orig_is_jb, (void**)&orig_ROOTED, (void**)&orig_DEBUGGER_ATTACHED,
                         (void**)&orig_isDebuggerAttached, (void**)&orig_checkJailbreak, (void**)&orig_hasCydia,
                         (void**)&orig_isJailbroken, (void**)&orig_amIBeingDebugged};
+
     for (int i = 0; i < 8; i++) {
-        char real_name[256];
-        strncpy(real_name, jb_funcs[i], sizeof(real_name));
-        obfuscate_str(real_name);
-        void *sym = dlsym(RTLD_DEFAULT, real_name);
-        if (sym) {
-            DobbyHook(sym, jb_repl[i], jb_orig[i]);
-        }
+        safe_hook(jb_funcs[i], jb_repl[i], jb_orig[i]);
     }
 
-    // Obj-C: UIDevice identifierForVendor
-    Class deviceCls = objc_getClass("UIDevice");
+    // Obj-C Hooks
+    Class deviceCls = objc_getClass(OBF("UIDevice"));
     if (deviceCls) {
         SEL sel = @selector(identifierForVendor);
         Method m = class_getInstanceMethod(deviceCls, sel);
@@ -416,8 +344,7 @@ void hook_all_functions() {
         }
     }
 
-    // Obj-C: LAContext (Face ID / Touch ID)
-    Class laContextCls = objc_getClass("LAContext");
+    Class laContextCls = objc_getClass(OBF("LAContext"));
     if (laContextCls) {
         SEL sel = @selector(evaluatePolicy:localizedReason:reply:);
         Method m = class_getInstanceMethod(laContextCls, sel);
@@ -435,7 +362,7 @@ void hook_all_functions() {
 }
 
 // ============================================================================
-// [9] Environment checks
+// [10] Safe Environment checks
 // ============================================================================
 int is_simulator() {
     junk_code();
@@ -444,7 +371,7 @@ int is_simulator() {
 #else
     struct utsname systemInfo;
     uname(&systemInfo);
-    if (strcmp(systemInfo.machine, "x86_64") == 0 || strcmp(systemInfo.machine, "i386") == 0) {
+    if (strcmp(systemInfo.machine, OBF("x86_64")) == 0 || strcmp(systemInfo.machine, OBF("i386")) == 0) {
         return 1;
     }
     return 0;
@@ -454,49 +381,24 @@ int is_simulator() {
 int is_jailbroken_paths() {
     junk_code();
     const char *paths[] = {
-        "/Applications/Cydia.app",
-        "/Library/MobileSubstrate/MobileSubstrate.dylib",
-        "/bin/bash",
-        "/usr/sbin/sshd",
-        "/etc/apt",
-        "/private/var/lib/apt/",
-        "/private/var/stash",
-        "/usr/libexec/cydia",
-        "/usr/sbin/frida-server",
-        "/usr/bin/ssh",
-        "/var/checkra1n.dmg",
-        "/.bootstrapped",
+        OBF("/Applications/Cydia.app"),
+        OBF("/Library/MobileSubstrate/MobileSubstrate.dylib"),
+        OBF("/bin/bash"),
+        OBF("/usr/sbin/sshd"),
+        OBF("/etc/apt"),
+        OBF("/usr/sbin/frida-server"),
         NULL
     };
     for (int i = 0; paths[i] != NULL; i++) {
-        if (access(paths[i], F_OK) == 0) {
-            return 1;
-        }
+        if (access(paths[i], F_OK) == 0) return 1;
     }
-    return 0;
-}
-
-int is_cydia_installed() {
-    junk_code();
-#if TARGET_OS_IPHONE
-    Class lsApplicationWorkspace = objc_getClass("LSApplicationWorkspace");
-    if (lsApplicationWorkspace) {
-        SEL defaultWorkspace = sel_registerName("defaultWorkspace");
-        SEL openApplicationWithBundleID = sel_registerName("openApplicationWithBundleID:");
-        id workspace = ((id (*)(id, SEL))objc_msgSend)((id)lsApplicationWorkspace, defaultWorkspace);
-        if (workspace) {
-            int opened = ((int (*)(id, SEL, id))objc_msgSend)(workspace, openApplicationWithBundleID, @"com.saurik.Cydia");
-            return opened;
-        }
-    }
-#endif
     return 0;
 }
 
 int is_dyld_hijacked() {
     junk_code();
-    if (getenv("DYLD_INSERT_LIBRARIES") != NULL) return 1;
-    if (getenv("DYLD_FORCE_FLAT_NAMESPACE") != NULL) return 1;
+    if (getenv(OBF("DYLD_INSERT_LIBRARIES")) != NULL) return 1;
+    if (getenv(OBF("DYLD_FORCE_FLAT_NAMESPACE")) != NULL) return 1;
     return 0;
 }
 
@@ -510,53 +412,8 @@ int is_debugger_attached() {
     name[1] = KERN_PROC;
     name[2] = KERN_PROC_PID;
     name[3] = getpid();
-    if (sysctl(name, 4, &info, &info_size, NULL, 0) == -1) {
-        return 0;
-    }
+    if (sysctl(name, 4, &info, &info_size, NULL, 0) == -1) return 0;
     return (info.kp_proc.p_flag & P_TRACED) != 0;
-}
-
-int ptrace_deny_attach() {
-    junk_code();
-    if (ptrace(PT_DENY_ATTACH, 0, 0, 0) == -1) {
-        return 1;
-    }
-    return 0;
-}
-
-int is_substrate_loaded() {
-    junk_code();
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        char buf[256];
-        strncpy(buf, name, sizeof(buf));
-        obfuscate_str(buf);
-        if (strstr(buf, "ZbovyrFhofgengr") || strstr(buf, "Fhofgengr") || strstr(buf, "PlqvnFhofgengr")) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-int is_ssh_running() {
-    junk_code();
-    return (access("/usr/sbin/sshd", F_OK) == 0);
-}
-
-int is_apt_installed() {
-    junk_code();
-    return (access("/etc/apt", F_OK) == 0);
-}
-
-int is_frida_installed() {
-    junk_code();
-    return (access("/usr/sbin/frida-server", F_OK) == 0);
-}
-
-int is_debugserver_installed() {
-    junk_code();
-    return (access("/Developer/usr/bin/debugserver", F_OK) == 0);
 }
 
 int check_provisioning() {
@@ -566,14 +423,15 @@ int check_provisioning() {
     
     _NSGetExecutablePath(NULL, &size);
     char *execPath = (char *)malloc(size); 
-    _NSGetExecutablePath(execPath, &size);
+    if (!execPath) return 0;
     
+    _NSGetExecutablePath(execPath, &size);
     char *lastSlash = strrchr(execPath, '/');
     if (lastSlash) {
         *lastSlash = '\0';
         char path[MAXPATHLEN];
-        snprintf(path, sizeof(path), "%s/embedded.mobileprovision", execPath);
-        fp = fopen(path, "r");
+        snprintf(path, sizeof(path), OBF("%s/embedded.mobileprovision"), execPath);
+        fp = fopen(path, OBF("r"));
     }
     free(execPath);
     
@@ -584,131 +442,34 @@ int check_provisioning() {
     fseek(fp, 0, SEEK_SET);
     
     char *data = (char *)malloc(len + 1);
+    if (!data) { fclose(fp); return 0; }
+    
     fread(data, 1, len, fp);
     fclose(fp);
     data[len] = '\0';
     
-    int is_debuggable = strstr(data, "<key>get-task-allow</key><true/>") != NULL;
+    int is_debuggable = strstr(data, OBF("<key>get-task-allow</key><true/>")) != NULL;
     free(data);
     return is_debuggable;
 }
 
-int check_env() {
-    junk_code();
-    const char *vars[] = {
-        "DYLD_PRINT_TO_FILE",
-        "DYLD_INSERT_LIBRARIES",
-        "CFNETWORK_DIAGNOSTICS",
-        "OBJC_DISABLE_VALIDATION",
-        NULL
-    };
-    for (int i = 0; vars[i] != NULL; i++) {
-        if (getenv(vars[i]) != NULL) return 1;
-    }
-    return 0;
-}
-
-int check_ppid() {
-    junk_code();
-    pid_t ppid = getppid();
-    char path[256];
-    snprintf(path, sizeof(path), "/proc/%d/exe", ppid);
-    if (access(path, F_OK) == 0) {
-        char target[256];
-        ssize_t len = readlink(path, target, sizeof(target)-1);
-        if (len != -1) {
-            target[len] = '\0';
-            char buf[256];
-            strncpy(buf, target, sizeof(buf));
-            obfuscate_str(buf);
-            if (strstr(buf, "qrohtfreire") || strstr(buf, "yyqo")) {
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-int is_frida_loaded() {
-    junk_code();
-    return (dlopen("frida-agent.dylib", RTLD_NOLOAD) != NULL);
-}
-
-// دالة مجمعة للكشف عن جميع التهديدات
 void perform_security_checks() {
     int threat_level = 0;
-    
-    if (is_simulator()) {
-        printf("[Security] Simulator detected.\n");
-        threat_level += 10;
-    }
-    if (is_jailbroken_paths()) {
-        printf("[Security] Jailbreak paths detected.\n");
-        threat_level += 20;
-    }
-    if (is_cydia_installed()) {
-        printf("[Security] Cydia installed.\n");
-        threat_level += 10;
-    }
-    if (is_dyld_hijacked()) {
-        printf("[Security] DYLD hijacking detected.\n");
-        threat_level += 30;
-    }
-    if (is_debugger_attached()) {
-        printf("[Security] Debugger attached.\n");
-        threat_level += 50;
-    }
-    if (ptrace_deny_attach()) {
-        printf("[Security] ptrace failed, debugger may be present.\n");
-        threat_level += 30;
-    }
-    if (is_substrate_loaded()) {
-        printf("[Security] Substrate loaded.\n");
-        threat_level += 20;
-    }
-    if (is_ssh_running()) {
-        printf("[Security] SSH server found.\n");
-        threat_level += 10;
-    }
-    if (is_apt_installed()) {
-        printf("[Security] APT found.\n");
-        threat_level += 10;
-    }
-    if (is_frida_installed() || is_frida_loaded()) {
-        printf("[Security] Frida detected.\n");
-        threat_level += 40;
-    }
-    if (is_debugserver_installed()) {
-        printf("[Security] Debugserver found.\n");
-        threat_level += 20;
-    }
-    if (check_provisioning()) {
-        printf("[Security] App is debuggable (get-task-allow).\n");
-        threat_level += 30;
-    }
-    if (check_env()) {
-        printf("[Security] Suspicious environment variables.\n");
-        threat_level += 10;
-    }
-    if (check_ppid()) {
-        printf("[Security] Parent process is debugger.\n");
-        threat_level += 40;
-    }
+    if (is_simulator()) threat_level += 10;
+    if (is_jailbroken_paths()) threat_level += 20;
+    if (is_dyld_hijacked()) threat_level += 30;
+    if (is_debugger_attached()) threat_level += 50;
+    if (check_provisioning()) threat_level += 30;
     
     if (threat_level > 50) {
-        printf("[Security] Threat level high (%d). Exiting.\n", threat_level);
-        usleep(rand() % 100000);
+        usleep(10000); // 10ms delay
         _exit(1);
-    } else if (threat_level > 20) {
-        printf("[Security] Threat level medium (%d). Some hooks may be disabled.\n", threat_level);
     }
 }
 
 // ============================================================================
-// [10] Initialization
+// [11] Initialization
 // ============================================================================
-
-// تم تغيير restrict إلى __restrict لتتوافق مع لغة C++ ويختفي الخطأ
 static int hooked_printf(const char * __restrict format, ...) {
     va_list args;
     va_start(args, format);
@@ -719,8 +480,8 @@ static int hooked_printf(const char * __restrict format, ...) {
 
 __attribute__((constructor))
 void init_hook() {
-    srand((unsigned int)time(NULL));
+    // التنفيذ الآمن والخفي
     perform_security_checks();
     hook_all_functions();
-    DobbyHook((void *)&printf, (void *)hooked_printf, (void **)&orig_printf);
+    safe_hook(OBF("printf"), (void *)hooked_printf, (void **)&orig_printf);
 }
