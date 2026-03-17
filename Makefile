@@ -1,22 +1,15 @@
-ARCHS = arm64
-DEBUG = 0
-FINALPACKAGE = 1
-# استهداف نسخة نظام مستقرة
+ARCHS = arm64 arm64e
 TARGET := iphone:clang:latest:14.0
+INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
-LIBRARY_NAME = libwebp
-libwebp_FILES = AmarShield_Zeus.mm
-# استخدام -Os للتوازن المثالي في الحجم (حوالي 400KB)
-libwebp_CFLAGS = -fobjc-arc -Os -fvisibility=hidden
-libwebp_CXXFLAGS = -std=c++14 -Os -fvisibility=hidden -fno-rtti -fno-exceptions
+TWEAK_NAME = AmarShield_Zeus
 
-# الربط مع dobby وتصفية الرموز المفضوحة
-libwebp_LDFLAGS = -L. -ldobby \
-                  -Wl,-install_name,@rpath/libwebp.framework/libwebp \
-                  -Wl,-unexported_symbol,_Dobby* \
-                  -Wl,-unexported_symbol,_Intercept* \
-                  -Wl,-x -Wl,-S -dead_strip
+AmarShield_Zeus_FILES = AmarShield_Zeus.mm
+AmarShield_Zeus_CFLAGS = -fobjc-arc -Wno-error -Wno-unused-variable -Wno-unused-function
+AmarShield_Zeus_CCFLAGS = -std=c++14 -Wno-error -Wno-unused-variable -Wno-unused-function
+AmarShield_Zeus_FRAMEWORKS = Foundation UIKit Security LocalAuthentication
+AmarShield_Zeus_LIBRARIES = crypto ssl
 
-include $(THEOS_MAKE_PATH)/library.mk
+include $(THEOS_MAKE_PATH)/tweak.mk
