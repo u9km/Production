@@ -1,18 +1,18 @@
 // ============================================================================
-// [0] System Headers (Ordered correctly to prevent C++ module errors)
+// [0] System Headers
 // ============================================================================
 #include <stdio.h>
-#include <stdarg.h>      // تمت الإضافة لدعم va_list في دالة hooked_printf
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <stdint.h>      // تمت الإضافة لمنع تضارب Dobby
-#include <pthread.h>     // تمت الإضافة لمنع تضارب OpenSSL
-#include <sys/types.h>   // تم النقل للأعلى لمنع تضارب C++
+#include <stdint.h>
+#include <pthread.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/ptrace.h>
-#include <sys/utsname.h> // تمت الإضافة لحل خطأ struct utsname
+#include <sys/utsname.h>
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <dlfcn.h>
@@ -31,13 +31,21 @@
 #include <Security/Security.h>
 #include <Security/SecKey.h>
 
-// External Libraries (OpenSSL & Dobby MUST be at the end)
+// ============================================================================
+// إجبار المترجم برمجياً على تجاهل تعارض C++ Modules مع extern "C"
+// ============================================================================
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmodule-import-in-extern-c"
+
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include "dobby.h"
+
+#pragma clang diagnostic pop
+// ============================================================================
 
 // ============================================================================
 // [1] Obfuscation helpers (simple ROT13)
@@ -285,7 +293,7 @@ static int my_SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile, co
 }
 
 // ============================================================================
-// [5] Original C functions for environment checks (from previous code)
+// [5] Original C functions for environment checks
 // ============================================================================
 static bool (*orig_is_jb)(void);
 static bool (*orig_ROOTED)(void);
@@ -427,7 +435,7 @@ void hook_all_functions() {
 }
 
 // ============================================================================
-// [9] Environment checks (from previous code, with random delays)
+// [9] Environment checks
 // ============================================================================
 int is_simulator() {
     junk_code();
@@ -556,7 +564,6 @@ int check_provisioning() {
     FILE *fp = NULL;
     uint32_t size = 0;
     
-    // تم إصلاح خطأ المصفوفة متغيرة الحجم (VLA) والتحويل الآمن للذاكرة
     _NSGetExecutablePath(NULL, &size);
     char *execPath = (char *)malloc(size); 
     _NSGetExecutablePath(execPath, &size);
@@ -568,7 +575,7 @@ int check_provisioning() {
         snprintf(path, sizeof(path), "%s/embedded.mobileprovision", execPath);
         fp = fopen(path, "r");
     }
-    free(execPath); // تنظيف الذاكرة بعد الاستخدام
+    free(execPath);
     
     if (!fp) return 0;
     
@@ -576,7 +583,6 @@ int check_provisioning() {
     long len = ftell(fp);
     fseek(fp, 0, SEEK_SET);
     
-    // تم إصلاح خطأ تصريح تحويل نوع الذاكرة (Casting)
     char *data = (char *)malloc(len + 1);
     fread(data, 1, len, fp);
     fclose(fp);
@@ -702,11 +708,11 @@ void perform_security_checks() {
 // [10] Initialization
 // ============================================================================
 
-// تمت إضافة تعريف الدالة المفقودة (hooked_printf) لكي لا يتعطل DobbyHook
-static int hooked_printf(const char * restrict format, ...) {
+// تم تغيير restrict إلى __restrict لتتوافق مع لغة C++ ويختفي الخطأ
+static int hooked_printf(const char * __restrict format, ...) {
     va_list args;
     va_start(args, format);
-    int ret = vprintf(format, args); // تمرير الطباعة بشكل طبيعي
+    int ret = vprintf(format, args);
     va_end(args);
     return ret;
 }
