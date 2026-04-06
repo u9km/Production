@@ -8,22 +8,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Theos & Dependencies
+      - name: Setup Theos
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential perl git curl libssl-dev
+          sudo apt-get install -y build-essential perl git curl libssl-dev xz-utils
           git clone --recursive https://github.com/theos/theos.git ~/theos
-          # جلب رؤوس أقلام (Headers) النظام فقط بدلاً من SDK كامل
-          mkdir -p ~/theos/sdks
-          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.tar.xz | tar -xJ -C ~/theos/sdks
           echo "THEOS=~/theos" >> $GITHUB_ENV
           echo "~/theos/bin" >> $GITHUB_PATH
 
-      - name: Build Package
-        run: make package FINALPACKAGE=1
+      - name: Setup SDK (Simplified)
+        run: |
+          # هذه الطريقة تسحب الـ SDK وتفكه بشكل صحيح ومباشر
+          mkdir -p ~/theos/sdks
+          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.tar.xz -o sdk.tar.xz
+          tar -xJf sdk.tar.xz -C ~/theos/sdks
+          rm sdk.tar.xz
 
-      - name: Save Result
-        uses: actions/upload-artifact@v4
-        with:
-          name: BlackIOS-Final
-          path: packages/*.deb
+      - name: Build Package
+        run: |
+          export THEOS=~/theos
+          make package FINALPACKAGE=1
