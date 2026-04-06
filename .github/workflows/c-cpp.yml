@@ -1,35 +1,29 @@
-name: Build Tweak
+name: AutoBuild
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v4
 
-      - name: Setup Theos
-        uses: target/setup-theos@v1
-        with:
-          theos-src: https://github.com/theos/theos.git
+      - name: Install Theos & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential perl git curl libssl-dev
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          # جلب رؤوس أقلام (Headers) النظام فقط بدلاً من SDK كامل
+          mkdir -p ~/theos/sdks
+          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.tar.xz | tar -xJ -C ~/theos/sdks
+          echo "THEOS=~/theos" >> $GITHUB_ENV
+          echo "~/theos/bin" >> $GITHUB_PATH
 
       - name: Build Package
-        run: |
-          make package FINALPACKAGE=1
-        env:
-          THEOS: ${{ github.workspace }}/theos
+        run: make package FINALPACKAGE=1
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+      - name: Save Result
+        uses: actions/upload-artifact@v4
         with:
-          name: BlackIOS-Deb
+          name: BlackIOS-Final
           path: packages/*.deb
