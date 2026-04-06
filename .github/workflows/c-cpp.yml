@@ -1,4 +1,4 @@
-name: Build Zeus Apex Tweak
+name: Build Tweak
 
 on:
   push:
@@ -9,27 +9,27 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
+        with:
+          submodules: recursive
 
       - name: Setup Theos
-        run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-          echo "THEOS=~/theos" >> $GITHUB_ENV
+        uses: target/setup-theos@v1
+        with:
+          theos-src: https://github.com/theos/theos.git
 
-      - name: Install Dependencies
+      - name: Build Package
         run: |
-          brew install openssl
-
-      - name: Build Tweak
-        run: |
-          make package clean
           make package FINALPACKAGE=1
+        env:
+          THEOS: ${{ github.workspace }}/theos
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
-          name: Zeus_Apex_Tweak
+          name: BlackIOS-Deb
           path: packages/*.deb
