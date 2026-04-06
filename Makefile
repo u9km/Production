@@ -1,15 +1,18 @@
+# المعماريات المطلوبة
 ARCHS = arm64 arm64e
-TARGET := iphone:clang:latest:14.0
-INSTALL_TARGET_PROCESSES = SpringBoard
+
+# إصدار النظام المستهدف
+TARGET = iphone:clang:latest:13.0
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = AmarShield_Zeus
+TWEAK_NAME = BlackIOS
 
-AmarShield_Zeus_FILES = AmarShield_Zeus.mm
-AmarShield_Zeus_CFLAGS = -fobjc-arc -Wno-error -Wno-unused-variable -Wno-unused-function
-AmarShield_Zeus_CCFLAGS = -std=c++14 -Wno-error -Wno-unused-variable -Wno-unused-function
-AmarShield_Zeus_FRAMEWORKS = Foundation UIKit Security LocalAuthentication
-AmarShield_Zeus_LIBRARIES = crypto ssl
+# ملف الكود البرمجي
+BlackIOS_FILES = Tweak.mm
+# أطر العمل المطلوبة للواجهة والنظام
+BlackIOS_FRAMEWORKS = UIKit Foundation CoreGraphics
+# تفعيل إدارة الذاكرة التلقائية
+BlackIOS_CFLAGS = -fobjc-arc
 
 include $(THEOS_MAKE_PATH)/tweak.mk
